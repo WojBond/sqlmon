@@ -12,8 +12,22 @@
 
 /*------------------------------------------------------------------- WERSJA */
 
-define('APP_VERSION', '9.1.1');
+define('APP_VERSION', '9.2.0');
 define('APP_CHANGELOG', [
+    '9.2.0' => [
+        'Nowy skrypt 09_kolektor_zapytan_xe.sql — pulpit odsyłał do nieistniejącego pliku',
+        'Skrypt 06: diagnostyka PAGELATCH obejmuje wszystkie bazy, nie tylko tempdb',
+        'Skrypt 04: dopisane wykluczenie SOS_WORK_DISPATCHER i sześciu innych oczekiwań bezczynnych',
+        'Skrypt 05: drzewo blokad odporne na samoblokadę wątków równoległych',
+        'Skrypt 00: metryki spójne z pulpitem (sesje użytkowników, samoblokady, PLE na NUMA)',
+    ],
+    '9.1.2' => [
+        'Eksport CSV: liczby z przecinkiem dziesiętnym (polski Excel czytał 7.57 jako lipiec)',
+        'Eksport CSV: ochrona przed wykonaniem formuły z komórki (= + - @)',
+        'Logowanie i routing odporne na parametry przesłane jako tablica',
+        'session_regenerate_id po poprawnym logowaniu',
+        'Walidacja nazwy bazy historii przed wstawieniem do zapytania',
+    ],
     '9.1.1' => [
         'Kafelek "Najdłuższe zapytanie": wykluczenie sesji zaparkowanych na wiecznym '
         . 'oczekiwaniu (Service Broker, WAITFOR, replikacja, CDC) + limit godzinowy',
@@ -781,6 +795,14 @@ SQL;
 
 /*------------------------------------------------------- HISTORIA (kolektor) */
 
+/** Nazwa bazy trafia do zapytania jako identyfikator, więc nie da się jej
+ *  sparametryzować. Pochodzi z konfiguracji, nie od użytkownika, ale walidacja
+ *  chroni przed literówką z nawiasem i przed przyszłym nadpisaniem z zewnątrz. */
+function bazaOk(string $baza): bool
+{
+    return (bool)preg_match('/^[A-Za-z_][A-Za-z0-9_$#-]{0,127}$/', $baza);
+}
+
 function historiaSeria(PDO $pdo, string $baza, int $godzin): array
 {
     $sql = "SELECT CONVERT(VARCHAR(5), czas, 108) AS czas,
@@ -815,7 +837,10 @@ $wymagaHasla = $KONFIG['haslo_dostepu'] !== '';
 $zalogowany  = !$wymagaHasla || !empty($_SESSION['sqlmon_ok']);
 
 if ($wymagaHasla && isset($_POST['haslo'])) {
-    if (hash_equals($KONFIG['haslo_dostepu'], $_POST['haslo'])) {
+    // is_string() jest konieczne: przy wysłaniu haslo[]=x parametr jest tablicą,
+    // a hash_equals() rzuca wtedy TypeError i strona zwraca błąd 500.
+    if (is_string($_POST['haslo']) && hash_equals($KONFIG['haslo_dostepu'], $_POST['haslo'])) {
+        session_regenerate_id(true);   // ochrona przed utrwaleniem identyfikatora sesji
         $_SESSION['sqlmon_ok'] = true;
         $zalogowany = true;
     } else {
@@ -839,8 +864,11 @@ if (($_GET['akcja'] ?? '') === 'dane') {
         exit;
     }
 
-    $nazwaSerwera = $_GET['serwer'] ?? array_key_first($KONFIG['serwery']);
-    $widok        = $_GET['widok']  ?? 'przeglad';
+    // Rzutowanie na tekst jest konieczne: przy ?serwer[]=x parametr jest tablicą,
+    // a użycie jej jako klucza tablicy rzuca TypeError.
+    $nazwaSerwera = is_string($_GET['serwer'] ?? null)
+        ? $_GET['serwer'] : array_key_first($KONFIG['serwery']);
+    $widok        = is_string($_GET['widok'] ?? null) ? $_GET['widok'] : 'przeglad';
 
     if (!isset($KONFIG['serwery'][$nazwaSerwera])) {
         echo json_encode(['ok' => false, 'blad' => 'Nieznana instancja: ' . $nazwaSerwera]);
@@ -980,6 +1008,8 @@ if (($_GET['akcja'] ?? '') === 'dane') {
             $baza = $KONFIG['baza_historii'];
             if ($baza === '') {
                 $odp['blad_historii'] = 'Kolektor historii nie jest skonfigurowany.';
+            } elseif (!bazaOk($baza)) {
+                $odp['blad_historii'] = 'Nieprawidłowa nazwa bazy historii w konfiguracji: ' . $baza;
             } else {
                 try {
                     $godzin = max(1, min(168, (int)($_GET['godzin'] ?? 6)));
@@ -1612,7 +1642,20 @@ function narysuj(d) {
 function csv(indeks) {
   const s = ostatnie.sekcje[indeks];
   const kol = s.kolumny.length ? s.kolumny : Object.keys(s.wiersze[0]);
-  const pole = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+
+  /* Dwie rzeczy naprawiane przy eksporcie:
+     1. Separator dziesiętny. Excel z polskimi ustawieniami czyta "7.57" jako
+        datę i zamienia na "lip.57". Liczby eksportujemy więc z przecinkiem.
+     2. Wstrzyknięcie formuły. Komórka zaczynająca się od = + - @ (albo od tabulatora
+        czy CR) jest przez Excela wykonywana jako formuła, a wartości pochodzą
+        z nazw programów i treści zapytań, czyli z zewnątrz. Poprzedzamy apostrofem. */
+  const pole = v => {
+    if (v === null || v === undefined) return '""';
+    if (jestLiczba(v)) return `"${String(v).replace('.', ',')}"`;
+    let t = String(v);
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return `"${t.replace(/"/g, '""')}"`;
+  };
 
   // Eksportujemy to, co widać – z uwzględnieniem filtra tekstowego.
   const fraza = szukaj.trim().toLowerCase();
@@ -1620,7 +1663,7 @@ function csv(indeks) {
     ? s.wiersze.filter(r => kol.map(k => r[k]).join(' ').toLowerCase().includes(fraza))
     : s.wiersze;
 
-  const tekst = [kol.map(pole).join(';')]
+  const tekst = [kol.map(k => `"${String(k).replace(/"/g, '""')}"`).join(';')]
     .concat(wiersze.map(r => kol.map(k => pole(r[k])).join(';')))
     .join('\r\n');
 

@@ -9,5 +9,11 @@ if [ -z "$WERSJA" ]; then echo "Nie znaleziono APP_VERSION w sqlmon.php" >&2; ex
 
 ARCHIWUM="sqlmon-v${WERSJA}.zip"
 rm -f "$ARCHIWUM"
-zip -q "$ARCHIWUM" sqlmon.php 08_kolektor_historii.sql CHANGELOG.md zbuduj_paczke.sh
+INSTRUKCJA="SQLMON-instrukcja-obslugi-v${WERSJA}.pdf"
+zip -q "$ARCHIWUM" sqlmon.php *.sql README.md CHANGELOG.md zbuduj_paczke.sh
+if [ -f "$INSTRUKCJA" ]; then
+    zip -q "$ARCHIWUM" "$INSTRUKCJA"
+else
+    echo "Uwaga: brak $INSTRUKCJA — paczka bez instrukcji. Uruchom najpierw: python3 instrukcja.py" >&2
+fi
 echo "Zbudowano: $ARCHIWUM (wersja $WERSJA)"

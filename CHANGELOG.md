@@ -3,6 +3,70 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 9.2.0
+
+Pierwsza wersja, w której przejrzano komplet skryptów `.sql`, a nie tylko pulpit.
+
+### Braki
+
+- **Brakował skrypt `09_kolektor_zapytan_xe.sql`**, mimo że `sqlmon.php` wprost
+  odsyła do niego użytkownika, gdy sesja Extended Events nie działa. Skrypt został
+  dopisany: zakłada sesję `sqlmon_zapytania` z progiem 3 s, buforem pierścieniowym
+  i trybem `ALLOW_SINGLE_EVENT_LOSS`.
+- README nie wymieniał w spisie zawartości ani pulpitu, ani skryptu 09.
+
+### Błędy w skryptach
+
+- **`06_tempdb_i_indeksy.sql`, sekcja PAGELATCH** filtrowała wyłącznie
+  `resource_description LIKE '2:%'`, czyli tempdb. Kontencja na ostatniej stronie
+  indeksu w bazie produkcyjnej nie pojawiała się w wyniku w ogóle, co prowadziło
+  do fałszywego wniosku, że problemu nie ma. Sekcja obejmuje teraz wszystkie bazy,
+  interpretuje zasób i została uzupełniona o rozwinięcie strony na konkretny obiekt
+  (`sys.dm_db_page_info`) oraz kontrolę konfiguracji plików tempdb.
+- **`04_oczekiwania.sql`** nie wykluczał `SOS_WORK_DISPATCHER` ani sześciu innych
+  oczekiwań bezczynnych, które pulpit odfiltrowuje. Ten jeden typ potrafi zająć
+  ponad 80% zestawienia i przysłonić realne sygnały — skrypt opisany w README jako
+  punkt startowy diagnozy dawał przez to inny obraz niż pulpit.
+- **`05_aktywnosc_i_blokady.sql`, drzewo blokad** zapętlało się przy samoblokadzie
+  wątków zapytania równoległego (`blocking_session_id = session_id`) i kończyło
+  błędem 530. Dodano warunek wykluczający oraz `OPTION (MAXRECURSION 50)`.
+- **`00_przeglad_serwera.sql`** używał heurystyki `session_id > 50`, liczył
+  samoblokady jako blokady i czytał PLE bez uwzględnienia węzłów NUMA — czyli
+  trzech błędów poprawionych wcześniej w pulpicie. Metryki są teraz spójne.
+
+### README
+
+- Progi orientacyjne uzgodnione z instrukcją PDF (runnable tasks, PLE).
+- Uwaga o środowiskach z MAXDOP 1: brak `CXPACKET` nie jest tam dobrą wiadomością.
+- Nowy wiersz w tabeli kierującej: `PAGELATCH_EX` poza tempdb.
+
+## 9.1.2
+
+### Poprawki
+
+- **Eksport CSV — separator dziesiętny.** Liczby były eksportowane z kropką,
+  którą Excel z polskimi ustawieniami interpretował jako datę (`7.57` → `lip.57`).
+  Wartości liczbowe eksportowane są teraz z przecinkiem.
+- **Eksport CSV — ochrona przed formułą.** Komórka zaczynająca się od `=`, `+`,
+  `-` lub `@` była wykonywana przez Excela jako formuła. Ponieważ dane pochodzą
+  z nazw programów i treści zapytań, jest to droga wstrzyknięcia. Takie komórki
+  są poprzedzane apostrofem.
+- **Parametry przesłane jako tablica powodowały błąd 500.** `haslo[]=x` wywracał
+  `hash_equals()`, a `?serwer[]=x` — odwołanie do klucza tablicy. Oba miejsca
+  sprawdzają teraz typ.
+- **`session_regenerate_id()` po poprawnym logowaniu** — ochrona przed
+  utrwaleniem identyfikatora sesji.
+- **Walidacja nazwy bazy historii** przed wstawieniem jej do zapytania jako
+  identyfikatora (nie da się jej sparametryzować).
+
+### Instrukcja obsługi
+
+- Nowy rozdział „Wartości referencyjne”: zakresy dla kafelków, średnie czasy
+  oczekiwań, latencja plików, przeliczenie progu PLE względem wielkości bufora.
+- Nowy rozdział „Na co zwracać uwagę”: pułapki interpretacyjne, kombinacje
+  wskazań, specyfika środowisk ERP z MAXDOP 1, rutyna przeglądu.
+- Nowy rozdział „Zapytania pogłębiające” — gotowe zapytania diagnostyczne.
+
 ## 9.1.1
 
 - **Kafelek „Najdłuższe zapytanie" nadal pokazywał uptime.** Filtr z 9.1.0 wycinał
