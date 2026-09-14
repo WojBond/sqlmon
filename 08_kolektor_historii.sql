@@ -156,15 +156,32 @@ BEGIN
            JOIN sys.dm_tran_session_transactions AS st ON st.transaction_id = t.transaction_id
            JOIN sys.dm_exec_sessions AS s ON s.session_id = st.session_id
           WHERE s.is_user_process = 1),
-        -- Najdłuższe realnie działające zapytanie użytkownika. Bez filtra na
-        -- background/sleeping metryka pokazywała zadanie systemowe żyjące od
-        -- startu instancji, czyli zawsze wartość równą uptime.
+        -- Najdłuższe realnie działające zapytanie użytkownika. Poza statusami
+        -- background/sleeping trzeba wyciąć sesje zaparkowane na wiecznym
+        -- oczekiwaniu (Service Broker, WAITFOR, replikacja, CDC) — mają status
+        -- running/suspended i is_user_process = 1, a żyją od startu instancji.
+        -- Limit dobowy: realne zapytanie ERP nigdy tyle nie trwa.
         (SELECT ISNULL(MAX(r.total_elapsed_time), 0) / 1000
            FROM sys.dm_exec_requests AS r
            JOIN sys.dm_exec_sessions AS s ON s.session_id = r.session_id
           WHERE s.is_user_process = 1
             AND r.session_id <> @@SPID
-            AND r.status NOT IN ('background', 'sleeping'));
+            AND r.status NOT IN ('background', 'sleeping')
+            AND r.total_elapsed_time < 86400000
+            AND ISNULL(r.wait_type, '') NOT IN (
+                  'WAITFOR', 'BROKER_RECEIVE_WAITFOR', 'BROKER_TASK_STOP',
+                  'BROKER_TRANSMITTER', 'BROKER_EVENTHANDLER',
+                  'SP_SERVER_DIAGNOSTICS_SLEEP', 'XE_LIVE_TARGET_TVF',
+                  'XE_TIMER_EVENT', 'FT_IFTS_SCHEDULER_IDLE_WAIT',
+                  'REDO_THREAD_PENDING_WORK', 'LOGMGR_QUEUE', 'CHECKPOINT_QUEUE',
+                  'DIRTY_PAGE_POLL', 'LAZYWRITER_SLEEP', 'REQUEST_FOR_DEADLOCK_SEARCH',
+                  'SQLTRACE_INCREMENTAL_FLUSH_SLEEP', 'HADR_FILESTREAM_IOMGR_IOCOMPLETION')
+            AND r.command NOT IN (
+                  'BRKR TASK', 'TASK MANAGER', 'LOG WRITER', 'LAZY WRITER',
+                  'CHECKPOINT', 'RESOURCE MONITOR', 'TRACE QUEUE TASK',
+                  'XE TIMER', 'XE DISPATCHER', 'GHOST CLEANUP', 'SIGNAL HANDLER',
+                  'DB STARTUP', 'FSAGENT', 'UNKNOWN TOKEN',
+                  'REPLICATION LOG READER', 'CDC CAPTURE'));
 
     INSERT INTO dbo.Snapshot_Waity (wait_type, wait_time_ms, tasks_count)
     SELECT wait_type, wait_time_ms, waiting_tasks_count

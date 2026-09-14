@@ -3,6 +3,20 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 9.1.1
+
+- **Kafelek „Najdłuższe zapytanie" nadal pokazywał uptime.** Filtr z 9.1.0 wycinał
+  tylko statusy `background` i `sleeping`, ale sesje zaparkowane na wiecznym
+  oczekiwaniu (aktywacja Service Brokera, `WAITFOR`, log reader replikacji, CDC)
+  mają status `running`/`suspended` i `is_user_process = 1`. Dołożone wykluczenia
+  po `wait_type` i `command` oraz konfigurowalny limit
+  `limit_dlugiego_zapytania_h` (domyślnie 24 h).
+- **Ostrzeżenie o Cost Threshold pokazywane tylko przy MAXDOP ≠ 1.** Przy MAXDOP 1
+  — typowym wymogu dostawców ERP — żadne zapytanie nie idzie równolegle, więc próg
+  jest ustawieniem martwym i ostrzeżenie wprowadzało w błąd.
+- Czytelne opisy dla `PREEMPTIVE_OS_*`, `OLEDB` i kolejki kompilacji planów.
+- Kolektor historii dostał ten sam filtr.
+
 ## 9.1.0
 
 ### Poprawki błędów

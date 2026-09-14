@@ -12,8 +12,14 @@
 
 /*------------------------------------------------------------------- WERSJA */
 
-define('APP_VERSION', '9.1.0');
+define('APP_VERSION', '9.1.1');
 define('APP_CHANGELOG', [
+    '9.1.1' => [
+        'Kafelek "Najdłuższe zapytanie": wykluczenie sesji zaparkowanych na wiecznym '
+        . 'oczekiwaniu (Service Broker, WAITFOR, replikacja, CDC) + limit godzinowy',
+        'Ostrzeżenie o Cost Threshold tylko przy MAXDOP innym niż 1',
+        'Czytelny opis dla PREEMPTIVE_OS_*, OLEDB i kolejki kompilacji planów',
+    ],
     '9.1.0' => [
         'Kafelek "Najdłuższe zapytanie" pomija sesje systemowe, tła i sesję dashboardu',
         'Kafelek "Aktywne zapytania" liczy wyłącznie sesje użytkowników (było: session_id > 50)',
@@ -66,6 +72,11 @@ $KONFIG = [
     // odpytującym DMV-y generuje miliony mikrooczekiwań, które nic nie wnoszą.
     // Jeśli używasz serwerów połączonych i chcesz je widzieć — usuń 'OLEDB'.
     'pomijaj_oczekiwania' => ['OLEDB'],
+
+    // Kafelek "Najdłuższe zapytanie" ignoruje żądania starsze niż tyle godzin.
+    // Sesje zaparkowane na wiecznym oczekiwaniu (Service Broker, replikacja)
+    // potrafią żyć od startu instancji i zaciemniać metrykę.
+    'limit_dlugiego_zapytania_h' => 24,
 
     // Progi ostrzeżeń
     'progi' => [
@@ -203,7 +214,19 @@ FROM (
 ORDER BY rb.record_id DESC;
 SQL;
 
-const Q_KAFELKI = <<<SQL
+/**
+ * Zapytanie kafelków KPI. Limit dla metryki "najdłuższe zapytanie" jest
+ * konfigurowalny — powyżej niego niemal na pewno mamy sesję zaparkowaną,
+ * a nie realne zapytanie użytkownika.
+ */
+function qKafelki(int $limitGodzin = 24): string
+{
+    $limitGodzin = max(1, min(720, $limitGodzin));
+    return str_replace('/*LIMIT_MS*/86400000',
+                       (string)($limitGodzin * 3600000), Q_KAFELKI_SZABLON);
+}
+
+const Q_KAFELKI_SZABLON = <<<SQL
 SELECT
     -- PLE: na serwerach NUMA licznik "Buffer Manager" potrafi mylić. Jeśli są
     -- węzły "Buffer Node", bierzemy z nich minimum (najgorszy węzeł decyduje).
@@ -234,12 +257,31 @@ SELECT
     -- Wartość w ms (PHP dzieli przez 1000 przy wyświetlaniu, próg też jest w ms).
     -- Bez filtra na background/sleeping kafelek pokazywał zadanie systemowe
     -- działające od startu instancji, czyli zawsze cały uptime.
+    -- Sesje zaparkowane na wiecznym oczekiwaniu (Service Broker, WAITFOR, CDC,
+    -- replikacja) mają status 'running'/'suspended' i is_user_process = 1,
+    -- więc trzeba je wyciąć po wait_type i command. Dodatkowo limit @LIMIT_H
+    -- godzin — realne zapytanie ERP nigdy tyle nie trwa.
     (SELECT ISNULL(MAX(r.total_elapsed_time), 0)
        FROM sys.dm_exec_requests AS r
        JOIN sys.dm_exec_sessions AS s ON s.session_id = r.session_id
       WHERE s.is_user_process = 1
         AND r.session_id <> @@SPID
-        AND r.status NOT IN ('background', 'sleeping'))                                    AS najdluzsze_ms,
+        AND r.status NOT IN ('background', 'sleeping')
+        AND r.total_elapsed_time < /*LIMIT_MS*/86400000
+        AND ISNULL(r.wait_type, '') NOT IN (
+              'WAITFOR', 'BROKER_RECEIVE_WAITFOR', 'BROKER_TASK_STOP',
+              'BROKER_TRANSMITTER', 'BROKER_EVENTHANDLER',
+              'SP_SERVER_DIAGNOSTICS_SLEEP', 'XE_LIVE_TARGET_TVF',
+              'XE_TIMER_EVENT', 'FT_IFTS_SCHEDULER_IDLE_WAIT',
+              'REDO_THREAD_PENDING_WORK', 'LOGMGR_QUEUE', 'CHECKPOINT_QUEUE',
+              'DIRTY_PAGE_POLL', 'LAZYWRITER_SLEEP', 'REQUEST_FOR_DEADLOCK_SEARCH',
+              'SQLTRACE_INCREMENTAL_FLUSH_SLEEP', 'HADR_FILESTREAM_IOMGR_IOCOMPLETION')
+        AND r.command NOT IN (
+              'BRKR TASK', 'TASK MANAGER', 'LOG WRITER', 'LAZY WRITER',
+              'CHECKPOINT', 'RESOURCE MONITOR', 'TRACE QUEUE TASK',
+              'XE TIMER', 'XE DISPATCHER', 'GHOST CLEANUP', 'SIGNAL HANDLER',
+              'DB STARTUP', 'FSAGENT', 'UNKNOWN TOKEN',
+              'REPLICATION LOG READER', 'CDC CAPTURE'))                                    AS najdluzsze_ms,
     (SELECT DATEDIFF(HOUR, sqlserver_start_time, GETDATE()) FROM sys.dm_os_sys_info)       AS uptime_h,
     CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(50))                                  AS wersja,
     CAST(SERVERPROPERTY('Edition') AS VARCHAR(80))                                         AS edycja,
@@ -321,6 +363,10 @@ SELECT TOP (12)
       WHEN wait_type LIKE 'BACKUPIO%'          THEN 'Operacje backupu'
       WHEN wait_type LIKE 'ASYNC_IO_COMPLETION%' THEN 'Dlugie operacje I/O – backup, autogrowth'
       WHEN wait_type LIKE 'IO_COMPLETION%'     THEN 'I/O poza stronami danych'
+      WHEN wait_type = 'PREEMPTIVE_OS_AUTHENTICATIONOPS' THEN 'Uwierzytelnianie Windows / AD'
+      WHEN wait_type LIKE 'PREEMPTIVE_OS_%'    THEN 'Wywolania systemowe poza kontrola SQL'
+      WHEN wait_type = 'OLEDB'                 THEN 'Serwery polaczone lub odpytywanie DMV'
+      WHEN wait_type LIKE 'RESOURCE_SEMAPHORE_QUERY_COMPILE%' THEN 'Kolejka kompilacji planow'
       ELSE '' END                                                         AS [Znaczenie]
 FROM W
 ORDER BY wait_time_ms DESC;
@@ -808,7 +854,7 @@ if (($_GET['akcja'] ?? '') === 'dane') {
 
         if ($widok === 'przeglad') {
 
-            $k = pobierz($pdo, Q_KAFELKI)[0] ?? [];
+            $k = pobierz($pdo, qKafelki($KONFIG['limit_dlugiego_zapytania_h'] ?? 24))[0] ?? [];
             $seria = array_reverse(pobierz($pdo, Q_CPU_RING));
             $cpuTeraz = $seria ? (int)end($seria)['cpu_sql'] : null;
 
@@ -1394,21 +1440,25 @@ function tabela(s, indeks) {
     </table></div></section>`;
 }
 
-/* Opis instancji pod wykresem CPU. CTFP <= 5 to domyślna wartość z 2000 roku —
-   przy niej mnóstwo drobnych zapytań idzie niepotrzebnie równolegle, co nabija
-   SOS_SCHEDULER_YIELD. Zmiana nie wymaga restartu, więc warto ją widzieć. */
+/* Opis instancji pod wykresem CPU. Ostrzeżenie o Cost Threshold ma sens tylko
+   wtedy, gdy równoległość jest w ogóle włączona — przy MAXDOP 1 (typowym
+   wymogu dostawców ERP) żadne zapytanie nie idzie równolegle i próg jest
+   martwym ustawieniem. */
 function opisSerwera(n) {
+  const maxdop = (n.maxdop === null || n.maxdop === undefined) ? null : Number(n.maxdop);
   const czesci = [
     n.edycja,
     `wersja ${n.wersja}`,
     `${n.rdzenie} rdzeni logicznych`,
   ];
   if (n.numa && Number(n.numa) > 1) czesci.push(`${n.numa} węzły NUMA`);
-  if (n.maxdop !== null && n.maxdop !== undefined) {
-    czesci.push(`MAXDOP ${Number(n.maxdop) === 0 ? '0 (bez limitu)' : n.maxdop}`);
+  if (maxdop !== null) {
+    czesci.push(maxdop === 0 ? 'MAXDOP 0 (bez limitu)'
+              : maxdop === 1 ? 'MAXDOP 1 — bez równoległości'
+              : `MAXDOP ${maxdop}`);
   }
   if (n.ctfp !== null && n.ctfp !== undefined) {
-    czesci.push(Number(n.ctfp) <= 5
+    czesci.push(maxdop !== 1 && Number(n.ctfp) <= 5
       ? `Cost Threshold ${n.ctfp} ⚠ domyślna wartość`
       : `Cost Threshold ${n.ctfp}`);
   }
