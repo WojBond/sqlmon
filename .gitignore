@@ -1,0 +1,27 @@
+# --- Dane uruchomieniowe: bazy i pliki użytkowników (nie są kodem) ---
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.accdb
+data/*
+!data/.htaccess
+!data/.gitkeep
+uploads/*
+!uploads/.htaccess
+
+# --- Dokumentacja PDF i paczki wdrożeniowe: trzymane na Google Drive ---
+*.pdf
+*.zip
+*.7z
+
+# --- Lokalna konfiguracja i hasła ---
+config.local.php
+.env
+
+# --- Systemowe ---
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
