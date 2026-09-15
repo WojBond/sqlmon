@@ -10,50 +10,6 @@
   http://localhost/sqlmon/sqlmon.php
 ==============================================================================*/
 
-/*------------------------------------------------------------------- WERSJA */
-
-define('APP_VERSION', '10.0.0');
-define('APP_CHANGELOG', [
-    '10.0.0' => [
-        'Konfiguracja przeniesiona z kodu do bazy SQLite — koniec edycji pliku przy wdrożeniu',
-        'Nowy ekran konfiguracja.php: serwery, instancje, ustawienia i progi z poziomu GUI',
-        'Model dwupoziomowy: serwer (maszyna) → wiele instancji (domyślna, nazwane, porty)',
-        'Hasła instancji szyfrowane AES-256-GCM, klucz poza bazą',
-        'Test połączenia z GUI, ze sprawdzeniem uprawnienia VIEW SERVER STATE',
-        'Baza historii ustawiana per instancja, nie globalnie',
-        'Osobne hasło administratora (password_hash) i opcjonalne hasło pulpitu',
-    ],
-    '9.2.0' => [
-        'Nowy skrypt 09_kolektor_zapytan_xe.sql — pulpit odsyłał do nieistniejącego pliku',
-        'Skrypt 06: diagnostyka PAGELATCH obejmuje wszystkie bazy, nie tylko tempdb',
-        'Skrypt 04: dopisane wykluczenie SOS_WORK_DISPATCHER i sześciu innych oczekiwań bezczynnych',
-        'Skrypt 05: drzewo blokad odporne na samoblokadę wątków równoległych',
-        'Skrypt 00: metryki spójne z pulpitem (sesje użytkowników, samoblokady, PLE na NUMA)',
-    ],
-    '9.1.2' => [
-        'Eksport CSV: liczby z przecinkiem dziesiętnym (polski Excel czytał 7.57 jako lipiec)',
-        'Eksport CSV: ochrona przed wykonaniem formuły z komórki (= + - @)',
-        'Logowanie i routing odporne na parametry przesłane jako tablica',
-        'session_regenerate_id po poprawnym logowaniu',
-        'Walidacja nazwy bazy historii przed wstawieniem do zapytania',
-    ],
-    '9.1.1' => [
-        'Kafelek "Najdłuższe zapytanie": wykluczenie sesji zaparkowanych na wiecznym '
-        . 'oczekiwaniu (Service Broker, WAITFOR, replikacja, CDC) + limit godzinowy',
-        'Ostrzeżenie o Cost Threshold tylko przy MAXDOP innym niż 1',
-        'Czytelny opis dla PREEMPTIVE_OS_*, OLEDB i kolejki kompilacji planów',
-    ],
-    '9.1.0' => [
-        'Kafelek "Najdłuższe zapytanie" pomija sesje systemowe, tła i sesję dashboardu',
-        'Kafelek "Aktywne zapytania" liczy wyłącznie sesje użytkowników (było: session_id > 50)',
-        'Kafelek "Zablokowane sesje" pomija samoblokady wątków równoległych',
-        'Page life expectancy odporne na NUMA — minimum z węzłów Buffer Node',
-        'Konfigurowalna lista pomijanych typów oczekiwań (domyślnie OLEDB)',
-        'Nagłówek pokazuje MAXDOP, Cost Threshold i liczbę węzłów NUMA',
-        'Kolektor historii: te same poprawki metryk + nowa kolumna najdluzsze_zapytanie_sek',
-    ],
-    '9.0.0' => ['Wersja bazowa przekazana do poprawek'],
-]);
 
 /*--------------------------------------------------------------- KONFIGURACJA */
 
@@ -113,9 +69,28 @@ $KONFIG = [
     ],
 ];
 
+/*  Pulpit pracuje w zakresie JEDNEGO serwera. Wyboru serwera dokonuje się na
+    stronie startowej (index.php), a tutaj przełącznik pokazuje już tylko
+    instancje tej maszyny. Bez parametru bierzemy pierwszy serwer z listy —
+    dzięki temu wejście wprost na sqlmon.php nadal działa.                     */
+$SERWER_ID = isset($_GET['serwer_id']) && is_numeric($_GET['serwer_id'])
+    ? (int)$_GET['serwer_id'] : 0;
+
+if ($SERWER_ID === 0 && $INSTANCJE) {
+    $SERWER_ID = (int)$INSTANCJE[0]['serwer_id'];
+}
+
+$SERWER = $SERWER_ID ? $mag->serwer($SERWER_ID) : null;
+
+/*  $KONFIG['serwery'] zawiera WSZYSTKIE aktywne instancje, bo z endpointu
+    korzysta także strona startowa, która odpytuje instancje wszystkich maszyn
+    naraz. Zawężenie do jednego serwera dotyczy wyłącznie przełącznika
+    w interfejsie — lista do niego powstaje niżej, jako $SERWERY_WIDOK.        */
 foreach ($INSTANCJE as $i) {
     $KONFIG['serwery'][(string)$i['id']] = $mag->parametryPolaczenia($i)
-        + ['etykieta' => Magazyn::etykieta($i), 'baza_historii' => $i['baza_historii']];
+        + ['etykieta'   => $i['nazwa'],
+           'serwer_id'  => (int)$i['serwer_id'],
+           'baza_historii' => $i['baza_historii']];
 }
 
 /*----------------------------------------------------------------- MECHANIZM */
@@ -871,7 +846,7 @@ if (($_GET['akcja'] ?? '') === 'dane') {
     $widok        = is_string($_GET['widok'] ?? null) ? $_GET['widok'] : 'przeglad';
 
     if (!$KONFIG['serwery']) {
-        echo json_encode(['blad' =>
+        echo json_encode(['ok' => false, 'blad' =>
             'Nie skonfigurowano żadnej instancji. Otwórz konfiguracja.php i dodaj serwer.'],
             JSON_UNESCAPED_UNICODE);
         exit;
@@ -1050,8 +1025,10 @@ if (($_GET['akcja'] ?? '') === 'dane') {
 
 /*--------------------------------------------------------------- WIDOK HTML */
 
+/* Przełącznik pokazuje wyłącznie instancje wybranego serwera. */
 $serwery = [];
 foreach ($KONFIG['serwery'] as $id => $cfg) {
+    if ($SERWER_ID && $cfg['serwer_id'] !== $SERWER_ID) continue;
     $serwery[$id] = $cfg['etykieta'];
 }
 ?>
@@ -1110,6 +1087,11 @@ a{color:var(--kreska)}
 }
 .marka{font:600 13px/1 var(--mono);letter-spacing:.22em;text-transform:uppercase}
 .marka span{color:var(--kreska)}
+.serwer-nazwa{font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--atrament);padding:5px 9px;border:1px solid var(--ramka);border-radius:2px;
+  background:var(--papier)}
+.serwer-host{font-weight:400;letter-spacing:.04em;text-transform:none;color:var(--atrament-2);
+  margin-left:7px}
 .marka .wersja{font:500 10px/1 var(--mono);letter-spacing:.06em;text-transform:none;
   color:var(--atrament-2);margin-left:8px;padding:2px 5px;border:1px solid var(--ramka);
   border-radius:3px;font-style:normal;cursor:help}
@@ -1273,10 +1255,15 @@ input[type=password]{font:13px var(--mono);padding:8px 10px;border:1px solid var
 <?php else: ?>
 
 <div class="listwa">
-  <?php if ($KONFIG['strona_glowna'] !== ''): ?>
-    <a class="powrot" href="<?= htmlspecialchars($KONFIG['strona_glowna']) ?>" title="Wróć do listy instancji">← Instancje</a>
-  <?php endif; ?>
+  <a class="powrot" href="<?= htmlspecialchars($KONFIG['strona_glowna'] !== '' ? $KONFIG['strona_glowna'] : 'index.php') ?>" title="Wróć do listy serwerów">← Serwery</a>
   <div class="marka">SQL<span>MON</span><em class="wersja" title="<?= htmlspecialchars(implode(' · ', APP_CHANGELOG[APP_VERSION] ?? [])) ?>">v<?= APP_VERSION ?></em></div>
+
+  <?php if ($SERWER): ?>
+    <div class="serwer-nazwa" title="<?= htmlspecialchars($SERWER['opis'] ?: $SERWER['host']) ?>">
+      <?= htmlspecialchars($SERWER['nazwa']) ?>
+      <span class="serwer-host"><?= htmlspecialchars($SERWER['host']) ?></span>
+    </div>
+  <?php endif; ?>
 
   <label for="wybor-serwera">Instancja</label>
   <select id="wybor-serwera">

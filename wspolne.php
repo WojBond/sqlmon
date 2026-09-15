@@ -8,6 +8,58 @@
 
 declare(strict_types=1);
 
+/*------------------------------------------------------------------ WERSJA */
+
+define('APP_VERSION', '10.1.0');
+define('APP_CHANGELOG', [
+    '10.1.0' => [
+        'index.php jest stroną startową: kafelek na serwer, wiersz na instancję',
+        'Kafelek serwera przyjmuje stan najgorszej ze swoich instancji',
+        'Pulpit pracuje w zakresie jednego serwera — przełącznik pokazuje tylko jego instancje',
+        'Przycisk powrotu nazywa się teraz "Serwery" i prowadzi do index.php',
+        'Numer wersji przeniesiony do wspolne.php — wspólny dla wszystkich ekranów',
+    ],
+    '10.0.0' => [
+        'Konfiguracja przeniesiona z kodu do bazy SQLite — koniec edycji pliku przy wdrożeniu',
+        'Nowy ekran konfiguracja.php: serwery, instancje, ustawienia i progi z poziomu GUI',
+        'Model dwupoziomowy: serwer (maszyna) → wiele instancji (domyślna, nazwane, porty)',
+        'Hasła instancji szyfrowane AES-256-GCM, klucz poza bazą',
+        'Test połączenia z GUI, ze sprawdzeniem uprawnienia VIEW SERVER STATE',
+        'Baza historii ustawiana per instancja, nie globalnie',
+        'Osobne hasło administratora (password_hash) i opcjonalne hasło pulpitu',
+    ],
+    '9.2.0' => [
+        'Nowy skrypt 09_kolektor_zapytan_xe.sql — pulpit odsyłał do nieistniejącego pliku',
+        'Skrypt 06: diagnostyka PAGELATCH obejmuje wszystkie bazy, nie tylko tempdb',
+        'Skrypt 04: dopisane wykluczenie SOS_WORK_DISPATCHER i sześciu innych oczekiwań bezczynnych',
+        'Skrypt 05: drzewo blokad odporne na samoblokadę wątków równoległych',
+        'Skrypt 00: metryki spójne z pulpitem (sesje użytkowników, samoblokady, PLE na NUMA)',
+    ],
+    '9.1.2' => [
+        'Eksport CSV: liczby z przecinkiem dziesiętnym (polski Excel czytał 7.57 jako lipiec)',
+        'Eksport CSV: ochrona przed wykonaniem formuły z komórki (= + - @)',
+        'Logowanie i routing odporne na parametry przesłane jako tablica',
+        'session_regenerate_id po poprawnym logowaniu',
+        'Walidacja nazwy bazy historii przed wstawieniem do zapytania',
+    ],
+    '9.1.1' => [
+        'Kafelek "Najdłuższe zapytanie": wykluczenie sesji zaparkowanych na wiecznym '
+        . 'oczekiwaniu (Service Broker, WAITFOR, replikacja, CDC) + limit godzinowy',
+        'Ostrzeżenie o Cost Threshold tylko przy MAXDOP innym niż 1',
+        'Czytelny opis dla PREEMPTIVE_OS_*, OLEDB i kolejki kompilacji planów',
+    ],
+    '9.1.0' => [
+        'Kafelek "Najdłuższe zapytanie" pomija sesje systemowe, tła i sesję dashboardu',
+        'Kafelek "Aktywne zapytania" liczy wyłącznie sesje użytkowników (było: session_id > 50)',
+        'Kafelek "Zablokowane sesje" pomija samoblokady wątków równoległych',
+        'Page life expectancy odporne na NUMA — minimum z węzłów Buffer Node',
+        'Konfigurowalna lista pomijanych typów oczekiwań (domyślnie OLEDB)',
+        'Nagłówek pokazuje MAXDOP, Cost Threshold i liczbę węzłów NUMA',
+        'Kolektor historii: te same poprawki metryk + nowa kolumna najdluzsze_zapytanie_sek',
+    ],
+    '9.0.0' => ['Wersja bazowa przekazana do poprawek'],
+]);
+
 /*------------------------------------------------------------------ ŚCIEŻKI */
 
 // Katalog z danymi. Domyślnie podkatalog "dane" obok skryptów, ale MOŻNA
@@ -207,7 +259,7 @@ SQL);
 
     public const DOMYSLNE = [
         'odswiezanie_sek'            => '30',
-        'strona_glowna'              => '',
+        'strona_glowna'              => 'index.php',
         'adres_iis'                  => '',
         'pomijaj_oczekiwania'        => 'OLEDB',
         'limit_dlugiego_zapytania_h' => '24',

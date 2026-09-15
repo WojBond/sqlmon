@@ -20,6 +20,7 @@ Wymagania: uprawnienie `VIEW SERVER STATE`, SQL Server 2016 lub nowszy (testowan
 | `08_kolektor_historii.sql` | Baza `DBA_Monitoring` + procedura + job Agenta co minutę | **Jednorazowo — instalacja** |
 | `09_kolektor_zapytan_xe.sql` | Sesja Extended Events `sqlmon_zapytania` — kto uruchomił długie zapytanie | Jednorazowo, jeśli chcesz historię wg użytkownika |
 | `sqlmon.php` | Pulpit webowy (XAMPP). Te same metryki co skrypty, odświeżane automatycznie | Codzienny podgląd; instrukcja w PDF |
+| `index.php` | Strona startowa: kafelek na serwer, wiersz na instancję | Punkt wejścia — od niego zaczynasz |
 | `konfiguracja.php` | GUI: serwery, instancje, loginy, hasła, progi. Dane w SQLite | Przy wdrożeniu i każdej zmianie instancji |
 | `wspolne.php` | Magazyn konfiguracji i szyfrowanie haseł. Dołączany przez oba powyższe | Nie uruchamia się samodzielnie |
 
@@ -48,7 +49,7 @@ SSMS 22 nadal obsługuje **Reports → Custom Reports** — wskazujesz plik `.rd
 
 ## Kolejność diagnozy (metodyka)
 
-0. **`sqlmon.php`** — rzut oka na kafelki, jeśli pulpit jest wdrożony. Szybsze niż uruchamianie skryptów.
+0. **`index.php`** — rzut oka na kafelki serwerów; kolor paska mówi, która maszyna wymaga uwagi. Szybsze niż uruchamianie skryptów.
 1. **`04_oczekiwania.sql`, sekcja 2** — pomiar różnicowy w oknie 30 s. Mówi, na co serwer czeka *teraz*, a nie od restartu.
 2. Dominujący typ oczekiwania kieruje dalej:
 

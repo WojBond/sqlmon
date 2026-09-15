@@ -3,6 +3,32 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 10.1.0
+
+### Nowa nawigacja: serwery → instancje
+
+- **`index.php` jest stroną startową.** Listę czyta z bazy konfiguracji, więc nie
+  trzeba już wpisywać tablicy `$PULPITY` ani trzymać osobnej kopii pulpitu na
+  instancję. Kafelek powstaje na każdy skonfigurowany serwer.
+- Wewnątrz kafelka jest wiersz na każdą aktywną instancję: dioda stanu, nazwa,
+  adres połączenia, wykres CPU z ostatniej godziny i cztery odczyty.
+- **Kafelek serwera przyjmuje stan najgorszej ze swoich instancji**, żeby jedna
+  instancja w alarmie była widoczna już z poziomu listy serwerów.
+- Kliknięcie wiersza otwiera pulpit od razu na tej instancji; kliknięcie stopki
+  kafelka otwiera pulpit na serwerze, z pierwszą instancją.
+- **Pulpit pracuje w zakresie jednego serwera.** Przełącznik u góry pokazuje
+  wyłącznie instancje tej maszyny, a jej nazwa i adres są widoczne w listwie.
+  Wejście wprost na `sqlmon.php`, bez parametru, otwiera pierwszy serwer z listy.
+- **Przycisk powrotu nazywa się „Serwery"** i prowadzi do `index.php`.
+  Wcześniej nazywał się „Instancje", co po zmianie modelu wprowadzałoby w błąd.
+
+### Pozostałe
+
+- Numer wersji przeniesiony do `wspolne.php` — jedno źródło dla wszystkich
+  czterech ekranów. Skrypt budujący czyta go stamtąd.
+- Odpowiedź endpointu przy pustej konfiguracji nie zawierała pola `ok`, przez co
+  strona startowa pokazywała „błąd odczytu" zamiast właściwego komunikatu.
+
 ## 10.0.0
 
 Wersja uniwersalna. **Zmiana łamiąca zgodność**: konfiguracja nie mieszka już
