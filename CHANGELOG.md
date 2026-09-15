@@ -3,6 +3,25 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 10.1.2
+
+Odporność pulpitu na pojedyncze nieudane żądanie.
+
+- **Jedno zerwane połączenie kasowało całą treść widoku.** Przy odświeżaniu co
+  30 s wystarczyła chwilowa awaria, żeby zostać z pustą stroną i komunikatem
+  „Przerwana łączność z serwerem WWW: NetworkError". Teraz komunikat pojawia się
+  jako pasek nad zachowanymi danymi z poprzedniego odczytu.
+- **Jedna cicha próba ponowna** po 1,5 s, zanim pulpit zgłosi problem. Zerwane
+  połączenie zdarza się przy recyklingu procesu serwera WWW i zwykle mija.
+- **Limit czasu żądania: 45 s.** Wcześniej przeglądarka czekała bez ograniczenia.
+  Wartość jest wyższa od limitu zapytania po stronie SQL (20 s), więc normalnie
+  nie zadziała.
+- **Odpowiedź, która nie jest JSON-em, jest teraz czytelna.** Gdy PHP przerwie
+  się błędem, zwraca HTML; wcześniej użytkownik widział komunikat parsera
+  o nieoczekiwanym znaku. Teraz pulpit wyciąga z HTML treść błędu i pokazuje ją
+  wraz z kodem HTTP.
+- Wygaśnięcie sesji (HTTP 401) obsługiwane osobnym komunikatem.
+
 ## 10.1.1
 
 - **Sekcja „Połączenia spoza serwera aplikacji" zwracała błąd 207** zamiast danych:

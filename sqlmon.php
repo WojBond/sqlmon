@@ -1514,30 +1514,101 @@ function rejestrator(id, tytul, podpis, legenda) {
 
 /* ---------- pobieranie ---------- */
 
+/*  Pojedyncze nieudane żądanie nie powinno kasować całego widoku — przy
+    odświeżaniu co 30 s jedna zerwana odpowiedź zostawiała pustą stronę.
+    Zamiast tego pokazujemy pasek nad zachowaną treścią i próbujemy ponownie.  */
+
+const LIMIT_CZASU_MS = 45000;   // dłużej niż limit zapytania po stronie SQL (20 s)
+let bylUdanyOdczyt = false;
+
+function pasekAwarii(tekst, szczegol) {
+  document.getElementById('pasek-awarii')?.remove();
+  const p = document.createElement('div');
+  p.id = 'pasek-awarii';
+  p.className = 'blad';
+  p.textContent = szczegol ? `${tekst} — ${szczegol}` : tekst;
+  if (bylUdanyOdczyt) {
+    p.textContent += '. Pokazane dane pochodzą z poprzedniego odczytu.';
+    tresc.prepend(p);
+  } else {
+    tresc.innerHTML = '';
+    tresc.appendChild(p);
+  }
+}
+
+async function jednoZadanie(url) {
+  const stoper = new AbortController();
+  const budzik = setTimeout(() => stoper.abort(), LIMIT_CZASU_MS);
+  try {
+    return await fetch(url, {
+      headers: {'Accept': 'application/json'},
+      cache: 'no-store',
+      signal: stoper.signal,
+    });
+  } finally {
+    clearTimeout(budzik);
+  }
+}
+
 async function wczytaj() {
   dioda.className = 'dioda pracuje';
   const godzin = document.getElementById('zakres-historii')?.value || 6;
-  try {
-    const url = `?akcja=dane&widok=${widok}&serwer=${encodeURIComponent(serwer)}`
-              + `&godzin=${godzin}&login=${encodeURIComponent(login)}`;
-    const odp = await fetch(url, {headers: {'Accept': 'application/json'}});
-    const d = await odp.json();
-    ostatnie = d;
+  const url = `?akcja=dane&widok=${widok}&serwer=${encodeURIComponent(serwer)}`
+            + `&godzin=${godzin}&login=${encodeURIComponent(login)}`;
 
-    if (!d.ok) {
-      tresc.innerHTML = `<div class="blad">${esc(d.blad)}</div>`;
+  let odp;
+  try {
+    odp = await jednoZadanie(url);
+  } catch (e) {
+    // Zerwane połączenie zdarza się przy recyklingu procesu serwera WWW.
+    // Jedna cicha próba ponowna, zanim zawiadomimy użytkownika.
+    try {
+      await new Promise(r => setTimeout(r, 1500));
+      odp = await jednoZadanie(url);
+    } catch (e2) {
       dioda.className = 'dioda blad';
+      pasekAwarii(
+        e2.name === 'AbortError'
+          ? `Serwer WWW nie odpowiedział w ciągu ${LIMIT_CZASU_MS / 1000} s`
+          : 'Przerwana łączność z serwerem WWW',
+        e2.name === 'AbortError' ? null : e2.message);
       return;
     }
-
-    narysuj(d);
-    stempel.textContent = 'odczyt ' + d.czas;
-    dioda.className = 'dioda';
-
-  } catch (e) {
-    tresc.innerHTML = `<div class="blad">Przerwana łączność z serwerem WWW: ${esc(e.message)}</div>`;
-    dioda.className = 'dioda blad';
   }
+
+  if (odp.status === 401) {
+    dioda.className = 'dioda blad';
+    pasekAwarii('Sesja wygasła. Odśwież stronę i zaloguj się ponownie');
+    return;
+  }
+
+  // Gdy PHP przerwie się błędem, dostaniemy HTML zamiast JSON. Bez tego
+  // użytkownik widziałby wyłącznie komunikat parsera o nieoczekiwanym znaku.
+  const tekst = await odp.text();
+  let d;
+  try {
+    d = JSON.parse(tekst);
+  } catch (e) {
+    dioda.className = 'dioda blad';
+    pasekAwarii(
+      `Serwer WWW zwrócił odpowiedź, która nie jest danymi (HTTP ${odp.status})`,
+      tekst.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) || 'pusta odpowiedź');
+    return;
+  }
+
+  ostatnie = d;
+
+  if (!d.ok) {
+    dioda.className = 'dioda blad';
+    pasekAwarii(d.blad || 'Nieznany błąd po stronie serwera');
+    return;
+  }
+
+  document.getElementById('pasek-awarii')?.remove();
+  narysuj(d);
+  stempel.textContent = 'odczyt ' + d.czas;
+  dioda.className = 'dioda';
+  bylUdanyOdczyt = true;
 }
 
 function narysuj(d) {

@@ -10,8 +10,14 @@ declare(strict_types=1);
 
 /*------------------------------------------------------------------ WERSJA */
 
-define('APP_VERSION', '10.1.1');
+define('APP_VERSION', '10.1.2');
 define('APP_CHANGELOG', [
+    '10.1.2' => [
+        'Nieudane odświeżenie nie kasuje już widoku — pasek nad zachowanymi danymi',
+        'Jedna cicha próba ponowna po zerwanym połączeniu',
+        'Limit czasu żądania 45 s zamiast czekania w nieskończoność',
+        'Odpowiedź HTML zamiast JSON pokazywana jako treść błędu, nie jako błąd parsera',
+    ],
     '10.1.1' => [
         'Sekcja "Połączenia spoza serwera aplikacji": poprawiony alias kolumny client_interface_name',
         'Kafelek "Najdłuższe zapytanie" pomija sesje SQL Server Agent i kont NT SERVICE',
