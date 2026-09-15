@@ -10,8 +10,12 @@ declare(strict_types=1);
 
 /*------------------------------------------------------------------ WERSJA */
 
-define('APP_VERSION', '10.1.0');
+define('APP_VERSION', '10.1.1');
 define('APP_CHANGELOG', [
+    '10.1.1' => [
+        'Sekcja "Połączenia spoza serwera aplikacji": poprawiony alias kolumny client_interface_name',
+        'Kafelek "Najdłuższe zapytanie" pomija sesje SQL Server Agent i kont NT SERVICE',
+    ],
     '10.1.0' => [
         'index.php jest stroną startową: kafelek na serwer, wiersz na instancję',
         'Kafelek serwera przyjmuje stan najgorszej ze swoich instancji',

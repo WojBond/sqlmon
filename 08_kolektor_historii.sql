@@ -167,6 +167,9 @@ BEGIN
           WHERE s.is_user_process = 1
             AND r.session_id <> @@SPID
             AND r.status NOT IN ('background', 'sleeping')
+            -- SQL Server Agent i konta usługowe trzymają sesje od startu instancji.
+            AND ISNULL(s.program_name, '') NOT LIKE 'SQLAgent%'
+            AND ISNULL(s.login_name, '')   NOT LIKE 'NT SERVICE%'
             AND r.total_elapsed_time < 86400000
             AND ISNULL(r.wait_type, '') NOT IN (
                   'WAITFOR', 'BROKER_RECEIVE_WAITFOR', 'BROKER_TASK_STOP',

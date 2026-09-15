@@ -3,6 +3,20 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 10.1.1
+
+- **Sekcja „Połączenia spoza serwera aplikacji" zwracała błąd 207** zamiast danych:
+  `Invalid column name 'client_interface_name'`. Kolumna należy do
+  `sys.dm_exec_sessions`, a zapytanie sięgało po nią przez alias
+  `sys.dm_exec_connections`. Pozostałe kolumny czytane z tego widoku
+  (`client_net_address`, `most_recent_sql_handle`, `session_id`) sprawdzone —
+  są poprawne.
+- **Kafelek „Najdłuższe zapytanie" pomija sesje SQL Server Agent i kont
+  `NT SERVICE`.** To one były źródłem wartości równej czasowi pracy instancji:
+  Agent trzyma sesje od startu serwera. Limit godzinowy z 9.1.1 już to maskował,
+  ale wykluczenie po nazwie programu i loginu jest precyzyjniejsze i nie zależy
+  od progu.
+
 ## 10.1.0
 
 ### Nowa nawigacja: serwery → instancje

@@ -264,6 +264,10 @@ SELECT
       WHERE s.is_user_process = 1
         AND r.session_id <> @@SPID
         AND r.status NOT IN ('background', 'sleeping')
+        -- SQL Server Agent i konta usługowe trzymają sesje od startu instancji.
+        -- To one dawały w tym kafelku wartość równą czasowi pracy serwera.
+        AND ISNULL(s.program_name, '') NOT LIKE 'SQLAgent%'
+        AND ISNULL(s.login_name, '')   NOT LIKE 'NT SERVICE%'
         AND r.total_elapsed_time < /*LIMIT_MS*/86400000
         AND ISNULL(r.wait_type, '') NOT IN (
               'WAITFOR', 'BROKER_RECEIVE_WAITFOR', 'BROKER_TASK_STOP',
@@ -596,7 +600,10 @@ SELECT
     ISNULL(s.host_name, '(brak)')                                  AS [Stacja],
     s.login_name                                                   AS [Login],
     LEFT(ISNULL(s.program_name, '(brak)'), 60)                     AS [Aplikacja],
-    LEFT(ISNULL(c.client_interface_name, '-'), 30)                 AS [Sterownik],
+    -- UWAGA: client_interface_name jest kolumną sys.dm_exec_sessions,
+    -- a NIE sys.dm_exec_connections. Do 10.1.0 stał tu alias "c", przez co
+    -- cała sekcja kończyła się błędem 207 (Invalid column name).
+    LEFT(ISNULL(s.client_interface_name, '-'), 30)                 AS [Sterownik],
     COUNT(*)                                                       AS [Sesje],
     SUM(CASE WHEN r.session_id IS NOT NULL THEN 1 ELSE 0 END)      AS [Pracuje teraz],
     SUM(s.cpu_time)                                                AS [CPU ms],
@@ -610,7 +617,7 @@ LEFT JOIN sys.dm_exec_requests AS r ON r.session_id = s.session_id
 WHERE s.is_user_process = 1
   AND (? = '' OR ISNULL(c.client_net_address, '') <> ?)
 GROUP BY c.client_net_address, s.host_name, s.login_name,
-         s.program_name, c.client_interface_name
+         s.program_name, s.client_interface_name
 ORDER BY SUM(s.cpu_time) DESC;
 SQL;
 
