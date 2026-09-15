@@ -12,8 +12,17 @@
 
 /*------------------------------------------------------------------- WERSJA */
 
-define('APP_VERSION', '9.2.0');
+define('APP_VERSION', '10.0.0');
 define('APP_CHANGELOG', [
+    '10.0.0' => [
+        'Konfiguracja przeniesiona z kodu do bazy SQLite — koniec edycji pliku przy wdrożeniu',
+        'Nowy ekran konfiguracja.php: serwery, instancje, ustawienia i progi z poziomu GUI',
+        'Model dwupoziomowy: serwer (maszyna) → wiele instancji (domyślna, nazwane, porty)',
+        'Hasła instancji szyfrowane AES-256-GCM, klucz poza bazą',
+        'Test połączenia z GUI, ze sprawdzeniem uprawnienia VIEW SERVER STATE',
+        'Baza historii ustawiana per instancja, nie globalnie',
+        'Osobne hasło administratora (password_hash) i opcjonalne hasło pulpitu',
+    ],
     '9.2.0' => [
         'Nowy skrypt 09_kolektor_zapytan_xe.sql — pulpit odsyłał do nieistniejącego pliku',
         'Skrypt 06: diagnostyka PAGELATCH obejmuje wszystkie bazy, nie tylko tempdb',
@@ -48,69 +57,68 @@ define('APP_CHANGELOG', [
 
 /*--------------------------------------------------------------- KONFIGURACJA */
 
+/*  Od wersji 10.0.0 konfiguracja nie mieszka już w tym pliku.
+    Serwery, instancje, loginy i hasła trzyma baza SQLite, a zarządza nimi
+    konfiguracja.php. Dzięki temu ten sam plik pulpitu działa wszędzie bez
+    edycji kodu, a aktualizacja wersji nie nadpisuje ustawień.
+
+    Katalog danych można przenieść poza drzewo serwera WWW, definiując
+    SQLMON_DANE PRZED dołączeniem wspolne.php, np.:
+        define('SQLMON_DANE', 'C:/sqlmon-dane');                                */
+
+require __DIR__ . '/wspolne.php';
+
+date_default_timezone_set('Europe/Warsaw');
+if (function_exists('mb_internal_encoding')) mb_internal_encoding('UTF-8');
+sesjaStart();
+
+try {
+    $mag = Magazyn::daj();
+} catch (Throwable $e) {
+    http_response_code(500);
+    echo '<!doctype html><meta charset="utf-8"><title>SQLMON</title>'
+       . '<body style="font:14px system-ui;padding:40px;max-width:700px">'
+       . '<h1>Nie udało się otworzyć konfiguracji</h1><p>' . h($e->getMessage()) . '</p>'
+       . '<p>Najczęstsza przyczyna: proces serwera WWW nie ma prawa zapisu do katalogu danych.</p>';
+    exit;
+}
+
+$UST       = $mag->ustawienia();
+$INSTANCJE = $mag->instancje(null, true);
+
+/*  Tablica $KONFIG jest zachowana, bo reszta pliku i tak z niej korzysta —
+    zmieniło się tylko to, skąd pochodzą wartości. Klucz 'serwery' jest
+    indeksowany identyfikatorem instancji, nie nazwą: nazwy mogą się powtarzać
+    między serwerami ("PROD" na ASTAT i "PROD" na ARSEN to dwie różne rzeczy).  */
 $KONFIG = [
-
-    // Monitorowane instancje. Klucz = nazwa widoczna w przełączniku u góry.
-    'serwery' => [
-        'PROD' => [
-            'host'         => 'localhost',        // lub 'SERWER\\INSTANCJA' albo 'IP,1433'
-            'baza'         => 'master',
-            'uzytkownik'   => 'sa',
-            'haslo'        => 'zmien_mnie',
-            'windows_auth' => false,              // true = logowanie kontem usługi Apache
-        ],
-        // 'TEST' => ['host'=>'192.168.1.20,1433','baza'=>'master','uzytkownik'=>'monitor','haslo'=>'...','windows_auth'=>false],
-    ],
-
-    // Baza z historią metryk (skrypt 08_kolektor_historii.sql).
-    // Zostaw pustą, jeśli kolektor nie jest zainstalowany – karty historii się ukryją.
-    'baza_historii' => 'DBA_Monitoring',
-
-    // Co ile sekund odświeżać dane. 0 = tylko ręcznie.
-    'odswiezanie_sek' => 30,
-
-    // Proste zabezpieczenie. Pusty ciąg = bez logowania (tylko sieć lokalna!).
-    'haslo_dostepu' => '',
-
-    // Odnośnik powrotu do rozdzielnicy. Pusty ciąg = ukryj przycisk.
-    'strona_glowna' => 'index.php',
-
-    // Adres serwera aplikacyjnego (IIS). Jego sesje są pomijane w sekcji
-    // "Połączenia spoza serwera aplikacji", żeby zostały tam wyłącznie
-    // połączenia bezpośrednie: SSMS, Excel, skrypty, integracje.
-    // Pusty ciąg = pokaż wszystkie adresy.
-    'adres_iis' => '10.10.10.25',
-
-    // Typy oczekiwań pomijane w tabeli "Dominujące oczekiwania" ponad standardową
-    // listę bezczynnych. OLEDB jest tu domyślnie, bo w środowisku z monitoringiem
-    // odpytującym DMV-y generuje miliony mikrooczekiwań, które nic nie wnoszą.
-    // Jeśli używasz serwerów połączonych i chcesz je widzieć — usuń 'OLEDB'.
-    'pomijaj_oczekiwania' => ['OLEDB'],
-
-    // Kafelek "Najdłuższe zapytanie" ignoruje żądania starsze niż tyle godzin.
-    // Sesje zaparkowane na wiecznym oczekiwaniu (Service Broker, replikacja)
-    // potrafią żyć od startu instancji i zaciemniać metrykę.
-    'limit_dlugiego_zapytania_h' => 24,
-
-    // Progi ostrzeżeń
+    'serwery'                    => [],
+    'odswiezanie_sek'            => (int)$UST['odswiezanie_sek'],
+    'haslo_dostepu'              => (string)$UST['haslo_pulpitu'],
+    'strona_glowna'              => (string)$UST['strona_glowna'],
+    'adres_iis'                  => (string)$UST['adres_iis'],
+    'pomijaj_oczekiwania'        => array_values(array_filter(array_map(
+                                        'trim', explode(',', (string)$UST['pomijaj_oczekiwania'])))),
+    'limit_dlugiego_zapytania_h' => (int)$UST['limit_dlugiego_zapytania_h'],
+    'baza_historii'              => '',   // ustalana per instancja, niżej
     'progi' => [
-        'cpu_uwaga'        => 70,
-        'cpu_alarm'        => 85,
-        'ple_uwaga'        => 900,
-        'ple_alarm'        => 300,
-        'latencja_uwaga'   => 20,
-        'latencja_alarm'   => 50,
-        'blokady_uwaga'    => 1,
-        'blokady_alarm'    => 5,
-        'dlugie_zapytanie' => 30000,   // ms
+        'cpu_uwaga'        => (int)$UST['prog_cpu_uwaga'],
+        'cpu_alarm'        => (int)$UST['prog_cpu_alarm'],
+        'ple_uwaga'        => (int)$UST['prog_ple_uwaga'],
+        'ple_alarm'        => (int)$UST['prog_ple_alarm'],
+        'latencja_uwaga'   => (int)$UST['prog_latencja_uwaga'],
+        'latencja_alarm'   => (int)$UST['prog_latencja_alarm'],
+        'blokady_uwaga'    => (int)$UST['prog_blokady_uwaga'],
+        'blokady_alarm'    => (int)$UST['prog_blokady_alarm'],
+        'dlugie_zapytanie' => (int)$UST['prog_dlugie_zapytanie'],
     ],
 ];
 
-/*----------------------------------------------------------------- MECHANIZM */
+foreach ($INSTANCJE as $i) {
+    $KONFIG['serwery'][(string)$i['id']] = $mag->parametryPolaczenia($i)
+        + ['etykieta' => Magazyn::etykieta($i), 'baza_historii' => $i['baza_historii']];
+}
 
-session_start();
-date_default_timezone_set('Europe/Warsaw');
-mb_internal_encoding('UTF-8');
+/*----------------------------------------------------------------- MECHANIZM */
 
 function sterownikDostepny(): bool
 {
@@ -795,14 +803,6 @@ SQL;
 
 /*------------------------------------------------------- HISTORIA (kolektor) */
 
-/** Nazwa bazy trafia do zapytania jako identyfikator, więc nie da się jej
- *  sparametryzować. Pochodzi z konfiguracji, nie od użytkownika, ale walidacja
- *  chroni przed literówką z nawiasem i przed przyszłym nadpisaniem z zewnątrz. */
-function bazaOk(string $baza): bool
-{
-    return (bool)preg_match('/^[A-Za-z_][A-Za-z0-9_$#-]{0,127}$/', $baza);
-}
-
 function historiaSeria(PDO $pdo, string $baza, int $godzin): array
 {
     $sql = "SELECT CONVERT(VARCHAR(5), czas, 108) AS czas,
@@ -867,8 +867,15 @@ if (($_GET['akcja'] ?? '') === 'dane') {
     // Rzutowanie na tekst jest konieczne: przy ?serwer[]=x parametr jest tablicą,
     // a użycie jej jako klucza tablicy rzuca TypeError.
     $nazwaSerwera = is_string($_GET['serwer'] ?? null)
-        ? $_GET['serwer'] : array_key_first($KONFIG['serwery']);
+        ? $_GET['serwer'] : (string)(array_key_first($KONFIG['serwery']) ?? '');
     $widok        = is_string($_GET['widok'] ?? null) ? $_GET['widok'] : 'przeglad';
+
+    if (!$KONFIG['serwery']) {
+        echo json_encode(['blad' =>
+            'Nie skonfigurowano żadnej instancji. Otwórz konfiguracja.php i dodaj serwer.'],
+            JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
     if (!isset($KONFIG['serwery'][$nazwaSerwera])) {
         echo json_encode(['ok' => false, 'blad' => 'Nieznana instancja: ' . $nazwaSerwera]);
@@ -1005,7 +1012,7 @@ if (($_GET['akcja'] ?? '') === 'dane') {
                 Q_UZ_TEMPDB);
 
         } elseif ($widok === 'historia') {
-            $baza = $KONFIG['baza_historii'];
+            $baza = (string)($KONFIG['serwery'][$nazwaSerwera]['baza_historii'] ?? '');
             if ($baza === '') {
                 $odp['blad_historii'] = 'Kolektor historii nie jest skonfigurowany.';
             } elseif (!bazaOk($baza)) {
@@ -1043,7 +1050,10 @@ if (($_GET['akcja'] ?? '') === 'dane') {
 
 /*--------------------------------------------------------------- WIDOK HTML */
 
-$serwery = array_keys($KONFIG['serwery']);
+$serwery = [];
+foreach ($KONFIG['serwery'] as $id => $cfg) {
+    $serwery[$id] = $cfg['etykieta'];
+}
 ?>
 <!DOCTYPE html>
 <html lang="pl">
@@ -1270,9 +1280,10 @@ input[type=password]{font:13px var(--mono);padding:8px 10px;border:1px solid var
 
   <label for="wybor-serwera">Instancja</label>
   <select id="wybor-serwera">
-    <?php foreach ($serwery as $s): ?>
-      <option value="<?= htmlspecialchars($s) ?>"><?= htmlspecialchars($s) ?></option>
+    <?php foreach ($serwery as $id => $etykieta): ?>
+      <option value="<?= htmlspecialchars((string)$id) ?>"><?= htmlspecialchars($etykieta) ?></option>
     <?php endforeach; ?>
+    <?php if (!$serwery): ?><option value="">— brak instancji —</option><?php endif; ?>
   </select>
 
   <label for="wybor-odswiezania">Odświeżanie</label>
@@ -1286,6 +1297,7 @@ input[type=password]{font:13px var(--mono);padding:8px 10px;border:1px solid var
 
   <button id="odswiez">Odśwież teraz</button>
   <button id="tryb-nocny" title="Przełącz kontrast">Tryb nocny</button>
+  <a class="powrot" href="konfiguracja.php" title="Serwery, instancje i ustawienia">Konfiguracja</a>
 
   <div class="zegar"><span class="dioda" id="dioda"></span><span id="stempel">—</span></div>
 </div>

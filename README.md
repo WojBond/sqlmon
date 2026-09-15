@@ -20,6 +20,8 @@ Wymagania: uprawnienie `VIEW SERVER STATE`, SQL Server 2016 lub nowszy (testowan
 | `08_kolektor_historii.sql` | Baza `DBA_Monitoring` + procedura + job Agenta co minutę | **Jednorazowo — instalacja** |
 | `09_kolektor_zapytan_xe.sql` | Sesja Extended Events `sqlmon_zapytania` — kto uruchomił długie zapytanie | Jednorazowo, jeśli chcesz historię wg użytkownika |
 | `sqlmon.php` | Pulpit webowy (XAMPP). Te same metryki co skrypty, odświeżane automatycznie | Codzienny podgląd; instrukcja w PDF |
+| `konfiguracja.php` | GUI: serwery, instancje, loginy, hasła, progi. Dane w SQLite | Przy wdrożeniu i każdej zmianie instancji |
+| `wspolne.php` | Magazyn konfiguracji i szyfrowanie haseł. Dołączany przez oba powyższe | Nie uruchamia się samodzielnie |
 
 ---
 

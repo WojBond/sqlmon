@@ -3,6 +3,58 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 10.0.0
+
+Wersja uniwersalna. **Zmiana łamiąca zgodność**: konfiguracja nie mieszka już
+w kodzie, więc po aktualizacji trzeba raz przejść przez `konfiguracja.php`.
+
+### Konfiguracja w bazie zamiast w pliku
+
+- Serwery, instancje, loginy, hasła, progi i ustawienia trzyma SQLite
+  (`dane/sqlmon.sqlite`). Ten sam `sqlmon.php` działa na każdym wdrożeniu bez
+  edycji kodu, a aktualizacja wersji nie nadpisuje ustawień.
+- Nowy ekran **`konfiguracja.php`**: dodawanie i edycja serwerów oraz instancji,
+  ustawienia globalne, progi ostrzeżeń, zmiana haseł.
+- **Model dwupoziomowy.** Serwer to maszyna (nazwa, adres, opis). Instancja
+  należy do serwera i dokłada nazwę instancji oraz port. Adres połączenia
+  powstaje automatycznie: `HOST`, `HOST\INSTANCJA`, `HOST,PORT` lub oba naraz.
+- Instancje są indeksowane identyfikatorem, nie nazwą — „PROD" może istnieć
+  na kilku serwerach naraz i nie będą się nadpisywać.
+- **Baza historii ustawiana per instancja.** Wcześniej była jedna wartość dla
+  całego pulpitu, co nie działało, gdy kolektor stoi tylko na części instancji.
+- Instancję można wyłączyć bez kasowania — znika z przełącznika, konfiguracja
+  zostaje.
+- **Test połączenia** wprost z GUI: mierzy czas, pokazuje nazwę, edycję i wersję
+  instancji oraz sprawdza, czy konto ma `VIEW SERVER STATE`.
+
+### Hasła
+
+- Hasła do instancji szyfrowane AES-256-GCM. Klucz w `dane/klucz.php`, poza bazą,
+  generowany przy pierwszym uruchomieniu.
+- Przy edycji instancji puste pole hasła oznacza „zostaw dotychczasowe".
+- Przełączenie na uwierzytelnianie Windows czyści login i szyfrogram, żeby
+  w bazie nie zostawał osierocony sekret.
+- Osobne **hasło administratora** (`password_hash`) chroni ekran konfiguracji.
+  Hasło pulpitu pozostaje opcjonalne i niezależne.
+- Formularze zapisu chronione tokenem CSRF.
+
+### Zakres ochrony haseł — przeczytaj
+
+Pulpit musi odszyfrować hasło, żeby połączyć się z instancją, więc klucz leży
+na tym samym serwerze. Kto ma dostęp do obu plików, ma hasła. Szyfrowanie chroni
+przed przypadkowym podejrzeniem przy przeglądaniu bazy i przed wyciekiem samej
+kopii pliku — nie przed kimś z dostępem do systemu plików. Realne zabezpieczenie
+to konto SQL tylko do odczytu, katalog danych poza drzewem WWW (stała
+`SQLMON_DANE`) i uwierzytelnianie Windows tam, gdzie się da.
+
+### Migracja z 9.x
+
+1. Wgraj `sqlmon.php`, `konfiguracja.php` i `wspolne.php`.
+2. Otwórz `konfiguracja.php` — poprosi o ustawienie hasła administratora.
+3. Przepisz serwery i instancje ze starej tablicy `$KONFIG`. Progi i ustawienia
+   znajdziesz w tej samej sekcji ekranu.
+4. Usuń stary plik pulpitu, żeby nie zostawiać haseł w kodzie.
+
 ## 9.2.0
 
 Pierwsza wersja, w której przejrzano komplet skryptów `.sql`, a nie tylko pulpit.

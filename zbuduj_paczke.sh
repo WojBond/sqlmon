@@ -10,7 +10,7 @@ if [ -z "$WERSJA" ]; then echo "Nie znaleziono APP_VERSION w sqlmon.php" >&2; ex
 ARCHIWUM="sqlmon-v${WERSJA}.zip"
 rm -f "$ARCHIWUM"
 INSTRUKCJA="SQLMON-instrukcja-obslugi-v${WERSJA}.pdf"
-zip -q "$ARCHIWUM" sqlmon.php *.sql README.md CHANGELOG.md zbuduj_paczke.sh
+zip -q "$ARCHIWUM" sqlmon.php konfiguracja.php wspolne.php *.sql README.md CHANGELOG.md zbuduj_paczke.sh
 if [ -f "$INSTRUKCJA" ]; then
     zip -q "$ARCHIWUM" "$INSTRUKCJA"
 else
