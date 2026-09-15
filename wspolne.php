@@ -10,8 +10,14 @@ declare(strict_types=1);
 
 /*------------------------------------------------------------------ WERSJA */
 
-define('APP_VERSION', '10.1.2');
+define('APP_VERSION', '10.2.0');
 define('APP_CHANGELOG', [
+    '10.2.0' => [
+        'Łańcuchy blokad pokazują pełny opis sesji blokującej, także gdy ta śpi',
+        'Ostatnie polecenie blokującego czytane z most_recent_sql_handle',
+        'Czas trwania otwartej transakcji i rozmiar zapisu do logu',
+        'Samoblokady wątków równoległych pomijane w łańcuchach',
+    ],
     '10.1.2' => [
         'Nieudane odświeżenie nie kasuje już widoku — pasek nad zachowanymi danymi',
         'Jedna cicha próba ponowna po zerwanym połączeniu',

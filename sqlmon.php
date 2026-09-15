@@ -450,21 +450,76 @@ GROUP BY d.name, d.state_desc, d.recovery_model_desc, d.log_reuse_wait_desc, d.i
 ORDER BY [Dane MB] DESC;
 SQL;
 
+/*  Łańcuchy blokad wraz z pełnym opisem sesji blokującej.
+
+    Sedno: sesja blokująca bardzo często NIE MA aktywnego żądania — jest
+    "sleeping" z otwartą, niezatwierdzoną transakcją. Nie ma jej więc w
+    sys.dm_exec_requests i nie widać jej w zakładce Aktywność. Zostawał sam
+    numer sesji, a zanim ktokolwiek zdążył ją sprawdzić w SSMS, rozłączała się.
+
+    Dlatego treść jej ostatniego polecenia bierzemy z
+    sys.dm_exec_connections.most_recent_sql_handle, które przeżywa zakończenie
+    żądania, a nie z sql_handle bieżącego żądania.                              */
 const Q_BLOKADY = <<<SQL
 SELECT
-    r.session_id                        AS [Sesja czekajaca],
-    r.blocking_session_id               AS [Sesja blokujaca],
-    r.wait_time                         AS [Czeka ms],
-    r.wait_type                         AS [Typ],
-    r.wait_resource                     AS [Zasob],
-    DB_NAME(r.database_id)              AS [Baza],
-    s.login_name                        AS [Login],
-    LEFT(ISNULL(s.program_name, ''), 40) AS [Program],
-    LEFT(LTRIM(REPLACE(REPLACE(qt.text, CHAR(13), ' '), CHAR(10), ' ')), 300) AS [Zapytanie]
+    r.session_id                          AS [Sesja czekajaca],
+    r.wait_time                           AS [Czeka ms],
+    r.wait_type                           AS [Typ],
+    r.wait_resource                       AS [Zasob],
+    DB_NAME(r.database_id)                AS [Baza],
+    s.login_name                          AS [Czeka login],
+
+    r.blocking_session_id                 AS [Sesja blokujaca],
+    ISNULL(b.status, 'rozlaczona')        AS [Blokujacy stan],
+    b.login_name                          AS [Blokujacy login],
+    b.host_name                           AS [Blokujacy host],
+    LEFT(ISNULL(b.program_name, ''), 40)  AS [Blokujacy program],
+    b.open_transaction_count              AS [Blokujacy otwarte transakcje],
+    CASE WHEN b.session_id IS NULL THEN NULL
+         ELSE DATEDIFF(SECOND, b.last_request_end_time, GETDATE()) END
+                                          AS [Blokujacy bezczynny s],
+    tr.transakcja_s                       AS [Blokujacy transakcja s],
+    tr.log_kb                             AS [Blokujacy log KB],
+    bc.client_net_address                 AS [Blokujacy adres],
+    LEFT(LTRIM(REPLACE(REPLACE(bq.text, CHAR(13), ' '), CHAR(10), ' ')), 300)
+                                          AS [Blokujacy ostatnie zapytanie],
+
+    LEFT(LTRIM(REPLACE(REPLACE(qt.text, CHAR(13), ' '), CHAR(10), ' ')), 300)
+                                          AS [Zapytanie czekajacego]
 FROM sys.dm_exec_requests AS r
-JOIN sys.dm_exec_sessions AS s ON s.session_id = r.session_id
+JOIN sys.dm_exec_sessions AS s
+     ON s.session_id = r.session_id
 OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) AS qt
+
+-- Sesja blokująca: LEFT JOIN, bo mogła się już rozłączyć.
+LEFT JOIN sys.dm_exec_sessions AS b
+     ON b.session_id = r.blocking_session_id
+-- TOP (1), bo przy MARS jedna sesja ma kilka połączeń i zwykły JOIN
+-- zwielokrotniłby wiersze blokad.
+OUTER APPLY (
+    SELECT TOP (1) c2.client_net_address, c2.most_recent_sql_handle
+    FROM sys.dm_exec_connections AS c2
+    WHERE c2.session_id = r.blocking_session_id
+    ORDER BY c2.connect_time DESC
+) AS bc
+OUTER APPLY sys.dm_exec_sql_text(bc.most_recent_sql_handle) AS bq
+
+-- Najstarsza otwarta transakcja blokującego i ile zdążyła zapisać do logu.
+-- Duży log oznacza, że KILL wywoła długi rollback, w trakcie którego blokada
+-- NADAL jest trzymana.
+OUTER APPLY (
+    SELECT TOP (1)
+        DATEDIFF(SECOND, dt.database_transaction_begin_time, GETDATE()) AS transakcja_s,
+        dt.database_transaction_log_bytes_used / 1024                   AS log_kb
+    FROM sys.dm_tran_session_transactions AS st
+    JOIN sys.dm_tran_database_transactions AS dt
+         ON dt.transaction_id = st.transaction_id
+    WHERE st.session_id = r.blocking_session_id
+    ORDER BY dt.database_transaction_begin_time
+) AS tr
+
 WHERE r.blocking_session_id <> 0
+  AND r.blocking_session_id <> r.session_id   -- samoblokada wątków równoległych
 ORDER BY r.wait_time DESC;
 SQL;
 
@@ -922,7 +977,10 @@ if (($_GET['akcja'] ?? '') === 'dane') {
             $odp['sekcje'][] = sekcja($pdo, 'Aktywne żądania',
                 'Posortowane od najdłużej działających.', Q_AKTYWNOSC);
             $odp['sekcje'][] = sekcja($pdo, 'Łańcuchy blokad',
-                'Sesja blokująca to ta, którą trzeba zdiagnozować.', Q_BLOKADY);
+                'Sesja blokująca to ta, którą trzeba zdiagnozować. Stan "sleeping" przy otwartej '
+                . 'transakcji oznacza, że aplikacja nie zatwierdziła zmian — wtedy kolumna '
+                . '"Blokujacy ostatnie zapytanie" pokazuje, co ta sesja zrobiła przed zaśnięciem.',
+                Q_BLOKADY);
 
         } elseif ($widok === 'io') {
             $odp['sekcje'][] = sekcja($pdo, 'Opóźnienia plików baz danych',

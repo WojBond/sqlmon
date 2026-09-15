@@ -3,6 +3,38 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 10.2.0
+
+### Łańcuchy blokad: kim jest sesja blokująca
+
+Dotąd tabela podawała wyłącznie **numer** sesji blokującej. Gdy ta sesja była
+uśpiona z otwartą transakcją — a to najczęstszy przypadek — nie było jej ani
+w zakładce Aktywność, ani w `sys.dm_exec_requests`. Zanim ktokolwiek zdążył ją
+sprawdzić w SSMS, zwykle się rozłączała i ślad ginął.
+
+Tabela pokazuje teraz dla każdej blokady:
+
+- **stan blokującego** (`sleeping`, `running`, albo `rozlaczona`, jeśli sesja już
+  zniknęła),
+- login, host, program i adres klienta,
+- liczbę otwartych transakcji i czas bezczynności,
+- **czas trwania najstarszej otwartej transakcji** oraz ile zapisała do logu —
+  duży zapis oznacza, że `KILL` wywoła długi rollback, w trakcie którego blokada
+  jest nadal trzymana,
+- **ostatnie wykonane polecenie**, czytane z
+  `sys.dm_exec_connections.most_recent_sql_handle`. To jest sedno poprawki:
+  `sql_handle` bieżącego żądania nie istnieje dla sesji uśpionej, a
+  `most_recent_sql_handle` przeżywa zakończenie żądania i mówi, co ta sesja
+  zrobiła, zanim zostawiła otwartą transakcję.
+
+### Pozostałe
+
+- Samoblokady wątków zapytania równoległego (`blocking_session_id = session_id`)
+  pomijane — to nie jest blokada w sensie biznesowym.
+- Połączenia blokującego pobierane przez `OUTER APPLY ... TOP (1)`, bo przy MARS
+  jedna sesja ma kilka wierszy w `dm_exec_connections` i zwykłe złączenie
+  zwielokrotniłoby wiersze blokad.
+
 ## 10.1.2
 
 Odporność pulpitu na pojedyncze nieudane żądanie.
