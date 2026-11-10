@@ -3,6 +3,21 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 10.2.2
+
+### Historia XE: koniec z „Query timeout expired”
+
+Po poprawce 10.2.1 historia zaczęła się faktycznie wczytywać i wyszło na jaw,
+że zapytanie przekracza 20-sekundowy limit (`SQLSTATE[HYT00]`). Przyczyna:
+rozbiór XML z bufora `ring_buffer` (do 5000 zdarzeń, kilka MB) metodami
+`.nodes()` / `.value()` po stronie SQL Server jest bardzo wolny — każde
+wywołanie `.value()` z predykatem `[@name="..."]` przeszukuje zdarzenie od nowa,
+a pulpit robił to dwukrotnie (historia + podsumowanie).
+
+Teraz pulpit jednym zapytaniem pobiera stan sesji, przesunięcie strefy czasowej
+i surowe `target_data` jako tekst, a rozbiór, filtr po loginie, sortowanie
+i agregację wykonuje PHP (SimpleXML). Test: 5000 zdarzeń / 3,6 MB w ok. 0,2 s.
+
 ## 10.2.1
 
 ### Historia zapytań wg użytkownika (Extended Events)
