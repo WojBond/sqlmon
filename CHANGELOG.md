@@ -3,6 +3,21 @@
 Numer wersji ma jedno źródło prawdy: stała `APP_VERSION` w `sqlmon.php`.
 Nazwa paczki jest z niej generowana przez `zbuduj_paczke.sh`.
 
+## 10.2.1
+
+### Historia zapytań wg użytkownika (Extended Events)
+
+- **Fałszywy komunikat „sesja nie działa”.** Pulpit pokazywał go zawsze, gdy
+  zapytanie do bufora zwróciło 0 wierszy — także przy działającej sesji, której
+  bufor był jeszcze pusty (np. tuż po uruchomieniu skryptu 09, który zakłada sesję
+  od nowa) albo gdy wybrany użytkownik nie miał zapytań powyżej progu. Stan sesji
+  jest teraz sprawdzany osobno w `sys.dm_xe_sessions` i pulpit rozróżnia trzy
+  przypadki: sesja nie działa / działa, ale bufor pusty / błąd odczytu (z treścią
+  błędu).
+- **Login zawsze „-”.** Zapytania historii czytały akcję `username`, a sesja
+  `sqlmon_zapytania` zbiera `server_principal_name`. Poprawione w historii
+  i w podsumowaniu wg loginu — atrybucja i filtr po użytkowniku działają.
+
 ## 10.2.0
 
 ### Łańcuchy blokad: kim jest sesja blokująca

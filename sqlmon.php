@@ -764,7 +764,15 @@ WHERE s.is_user_process = 1
 ORDER BY s.last_request_end_time DESC;
 SQL;
 
-// Historia z sesji Extended Events (skrypt 09). Zwraca błąd, jeśli sesja nie istnieje.
+// Czy sesja kolektora (skrypt 09) jest uruchomiona na instancji.
+const Q_ZAP_XE_STAN = <<<SQL
+SELECT COUNT(*) AS dziala
+FROM sys.dm_xe_sessions
+WHERE name = N'sqlmon_zapytania';
+SQL;
+
+// Historia z sesji Extended Events (skrypt 09). Login z akcji server_principal_name —
+// tej samej, którą zbiera sesja (wcześniej czytano nieistniejącą akcję "username").
 const Q_ZAP_HISTORIA_XE = <<<SQL
 WITH Bufor AS (
     SELECT CAST(st.target_data AS XML) AS dane
@@ -775,7 +783,7 @@ WITH Bufor AS (
 Zdarzenia AS (
     SELECT
         x.zd.value('@timestamp', 'datetime2')                                        AS czas_utc,
-        x.zd.value('(action[@name="username"]/value)[1]', 'nvarchar(128)')           AS login,
+        x.zd.value('(action[@name="server_principal_name"]/value)[1]', 'nvarchar(128)')           AS login,
         x.zd.value('(action[@name="client_hostname"]/value)[1]', 'nvarchar(128)')    AS stacja,
         x.zd.value('(action[@name="client_app_name"]/value)[1]', 'nvarchar(128)')    AS aplikacja,
         x.zd.value('(action[@name="database_name"]/value)[1]', 'nvarchar(128)')      AS baza,
@@ -818,7 +826,7 @@ WITH Bufor AS (
 ),
 Zdarzenia AS (
     SELECT
-        x.zd.value('(action[@name="username"]/value)[1]', 'nvarchar(128)') AS login,
+        x.zd.value('(action[@name="server_principal_name"]/value)[1]', 'nvarchar(128)') AS login,
         x.zd.value('(data[@name="duration"]/value)[1]', 'bigint')          AS czas_us,
         x.zd.value('(data[@name="cpu_time"]/value)[1]', 'bigint')          AS cpu_us,
         x.zd.value('(data[@name="logical_reads"]/value)[1]', 'bigint')     AS odczyty
@@ -1008,18 +1016,32 @@ if (($_GET['akcja'] ?? '') === 'dane') {
                 'Obejmuje też sesje uśpione. Pokazuje, co użytkownik puścił jako ostatnie, zanim przeszedł w bezczynność.',
                 Q_ZAP_OSTATNIE, [$login, $login]);
 
-            // Historia z Extended Events – tylko jeśli sesja kolektora działa.
-            $xe = sekcja($pdo, 'Historia zapytań wg użytkownika',
-                'Z sesji Extended Events "sqlmon_zapytania". Rejestruje zapytania powyżej progu czasu.',
-                Q_ZAP_HISTORIA_XE, [$login, $login]);
+            // Historia z Extended Events. Stan sesji sprawdzany osobno, żeby odróżnić
+            // "sesja nie działa" od "sesja działa, ale bufor jest pusty" i od błędu odczytu.
+            try {
+                $xeSesja = pobierz($pdo, Q_ZAP_XE_STAN);
+                $odp['xe_stan'] = ((int)($xeSesja[0]['dziala'] ?? 0)) > 0 ? 'dziala' : 'brak';
+            } catch (Throwable $e) {
+                $odp['xe_stan'] = 'blad';
+                $odp['xe_blad'] = $e->getMessage();
+            }
 
-            if ($xe['blad'] === null && $xe['wiersze']) {
-                $odp['sekcje'][] = sekcja($pdo, 'Podsumowanie historii wg loginu',
-                    'Agregat z bufora Extended Events — kto sumarycznie zjadł najwięcej CPU.',
-                    Q_ZAP_HISTORIA_SUMA);
-                $odp['sekcje'][] = $xe;
-            } else {
-                $odp['brak_xe'] = true;
+            if ($odp['xe_stan'] === 'dziala') {
+                $xe = sekcja($pdo, 'Historia zapytań wg użytkownika',
+                    'Z sesji Extended Events "sqlmon_zapytania". Rejestruje zapytania powyżej progu czasu.',
+                    Q_ZAP_HISTORIA_XE, [$login, $login]);
+
+                if ($xe['blad'] !== null) {
+                    $odp['xe_stan'] = 'blad';
+                    $odp['xe_blad'] = $xe['blad'];
+                } elseif (!$xe['wiersze']) {
+                    $odp['xe_stan'] = 'pusta';
+                } else {
+                    $odp['sekcje'][] = sekcja($pdo, 'Podsumowanie historii wg loginu',
+                        'Agregat z bufora Extended Events — kto sumarycznie zjadł najwięcej CPU.',
+                        Q_ZAP_HISTORIA_SUMA);
+                    $odp['sekcje'][] = $xe;
+                }
             }
 
             $odp['sekcje'][] = sekcja($pdo, 'Najdroższe zapytania wg CPU (cache planów)',
@@ -1261,6 +1283,7 @@ td em{font-style:normal;color:var(--alarm)}
 .uwaga-xe{padding:11px 16px;background:var(--karta);border:1px solid var(--ramka);
   border-left:3px solid var(--uwaga);font-size:12.5px;margin-bottom:16px;border-radius:2px;
   color:var(--atrament-2)}
+.uwaga-xe.info{border-left-color:var(--ramka)}
 .uwaga-xe code{font:11.5px var(--mono);background:var(--papier);padding:2px 5px;border-radius:2px;
   color:var(--atrament)}
 
@@ -1688,10 +1711,18 @@ function narysuj(d) {
       <span class="wynik" id="filtr-wynik"></span>
     </div>`;
 
-    if (d.brak_xe) {
+    if (d.xe_stan === 'brak') {
       html += `<div class="uwaga-xe">Historia zapytań wg użytkownika jest niedostępna —
         sesja Extended Events <code>sqlmon_zapytania</code> nie działa na tej instancji.
         Uruchom skrypt <code>09_kolektor_zapytan_xe.sql</code>, aby zbierać kto co uruchamiał.</div>`;
+    } else if (d.xe_stan === 'pusta') {
+      html += `<div class="uwaga-xe info">Sesja Extended Events <code>sqlmon_zapytania</code> działa,
+        ale jej bufor nie zawiera jeszcze ${d.login ? `zapytań użytkownika <code>${esc(d.login)}</code>`
+        : 'żadnych zapytań'} dłuższych niż próg ze skryptu 09 (domyślnie 3 s).
+        Bufor zbiera dane od startu sesji i zeruje się po restarcie instancji lub ponownym uruchomieniu skryptu.</div>`;
+    } else if (d.xe_stan === 'blad') {
+      html += `<div class="uwaga-xe">Nie udało się odczytać historii z sesji Extended Events
+        <code>sqlmon_zapytania</code>: <code>${esc(d.xe_blad || 'nieznany błąd')}</code></div>`;
     }
   }
 
