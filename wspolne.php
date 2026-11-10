@@ -10,8 +10,13 @@ declare(strict_types=1);
 
 /*------------------------------------------------------------------ WERSJA */
 
-define('APP_VERSION', '10.2.0');
+define('APP_VERSION', '10.2.1');
 define('APP_CHANGELOG', [
+    '10.2.1' => [
+        'Historia XE: login czytany z akcji server_principal_name, którą zbiera sesja',
+        'Pusty bufor XE nie jest już zgłaszany jako niedziałająca sesja',
+        'Błąd odczytu historii XE pokazywany z treścią zamiast ogólnego komunikatu',
+    ],
     '10.2.0' => [
         'Łańcuchy blokad pokazują pełny opis sesji blokującej, także gdy ta śpi',
         'Ostatnie polecenie blokującego czytane z most_recent_sql_handle',
