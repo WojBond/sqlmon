@@ -10,8 +10,12 @@ declare(strict_types=1);
 
 /*------------------------------------------------------------------ WERSJA */
 
-define('APP_VERSION', '10.2.1');
+define('APP_VERSION', '10.2.2');
 define('APP_CHANGELOG', [
+    '10.2.2' => [
+        'Historia XE bez przekroczenia limitu czasu (HYT00): bufor rozbierany w PHP, nie w SQL Server',
+        'Jeden odczyt bufora zamiast dwóch — historia i podsumowanie z tych samych danych',
+    ],
     '10.2.1' => [
         'Historia XE: login czytany z akcji server_principal_name, którą zbiera sesja',
         'Pusty bufor XE nie jest już zgłaszany jako niedziałająca sesja',

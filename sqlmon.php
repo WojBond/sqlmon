@@ -764,87 +764,120 @@ WHERE s.is_user_process = 1
 ORDER BY s.last_request_end_time DESC;
 SQL;
 
-// Czy sesja kolektora (skrypt 09) jest uruchomiona na instancji.
-const Q_ZAP_XE_STAN = <<<SQL
-SELECT COUNT(*) AS dziala
-FROM sys.dm_xe_sessions
-WHERE name = N'sqlmon_zapytania';
-SQL;
-
-// Historia z sesji Extended Events (skrypt 09). Login z akcji server_principal_name —
-// tej samej, którą zbiera sesja (wcześniej czytano nieistniejącą akcję "username").
-const Q_ZAP_HISTORIA_XE = <<<SQL
-WITH Bufor AS (
-    SELECT CAST(st.target_data AS XML) AS dane
-    FROM sys.dm_xe_sessions AS s
-    JOIN sys.dm_xe_session_targets AS st ON st.event_session_address = s.address
-    WHERE s.name = N'sqlmon_zapytania' AND st.target_name = N'ring_buffer'
-),
-Zdarzenia AS (
-    SELECT
-        x.zd.value('@timestamp', 'datetime2')                                        AS czas_utc,
-        x.zd.value('(action[@name="server_principal_name"]/value)[1]', 'nvarchar(128)')           AS login,
-        x.zd.value('(action[@name="client_hostname"]/value)[1]', 'nvarchar(128)')    AS stacja,
-        x.zd.value('(action[@name="client_app_name"]/value)[1]', 'nvarchar(128)')    AS aplikacja,
-        x.zd.value('(action[@name="database_name"]/value)[1]', 'nvarchar(128)')      AS baza,
-        x.zd.value('(data[@name="duration"]/value)[1]', 'bigint')                    AS czas_us,
-        x.zd.value('(data[@name="cpu_time"]/value)[1]', 'bigint')                    AS cpu_us,
-        x.zd.value('(data[@name="logical_reads"]/value)[1]', 'bigint')               AS odczyty,
-        x.zd.value('(data[@name="row_count"]/value)[1]', 'bigint')                   AS wiersze,
-        COALESCE(
-            x.zd.value('(data[@name="statement"]/value)[1]', 'nvarchar(max)'),
-            x.zd.value('(data[@name="batch_text"]/value)[1]', 'nvarchar(max)')
-        )                                                                            AS tekst
-    FROM Bufor
-    CROSS APPLY Bufor.dane.nodes('RingBufferTarget/event') AS x(zd)
-)
-SELECT TOP (100)
-    ISNULL(login, '-')                                    AS [Login],
-    ISNULL(stacja, '-')                                   AS [Stacja],
-    CONVERT(VARCHAR(19), DATEADD(MINUTE,
-        DATEDIFF(MINUTE, GETUTCDATE(), GETDATE()), czas_utc), 120)  AS [Czas],
-    ISNULL(baza, '-')                                     AS [Baza],
-    CAST(czas_us / 1000.0 AS DECIMAL(18,1))               AS [Czas ms],
-    CAST(cpu_us / 1000.0 AS DECIMAL(18,1))                AS [CPU ms],
-    odczyty                                               AS [Odczyty],
-    wiersze                                               AS [Wiersze],
-    LEFT(ISNULL(aplikacja, '-'), 40)                      AS [Aplikacja],
-    LEFT(LTRIM(REPLACE(REPLACE(REPLACE(ISNULL(tekst, ''),
-        CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' ')), 400) AS [Zapytanie]
-FROM Zdarzenia
-WHERE (? = '' OR login = ?)
-ORDER BY czas_utc DESC;
-SQL;
-
-// Podsumowanie historii XE w rozbiciu na login.
-const Q_ZAP_HISTORIA_SUMA = <<<SQL
-WITH Bufor AS (
-    SELECT CAST(st.target_data AS XML) AS dane
-    FROM sys.dm_xe_sessions AS s
-    JOIN sys.dm_xe_session_targets AS st ON st.event_session_address = s.address
-    WHERE s.name = N'sqlmon_zapytania' AND st.target_name = N'ring_buffer'
-),
-Zdarzenia AS (
-    SELECT
-        x.zd.value('(action[@name="server_principal_name"]/value)[1]', 'nvarchar(128)') AS login,
-        x.zd.value('(data[@name="duration"]/value)[1]', 'bigint')          AS czas_us,
-        x.zd.value('(data[@name="cpu_time"]/value)[1]', 'bigint')          AS cpu_us,
-        x.zd.value('(data[@name="logical_reads"]/value)[1]', 'bigint')     AS odczyty
-    FROM Bufor
-    CROSS APPLY Bufor.dane.nodes('RingBufferTarget/event') AS x(zd)
-)
+// Sesja kolektora (skrypt 09): stan, przesunięcie strefy i surowy bufor w jednym odczycie.
+// XML celowo NIE jest parsowany po stronie SQL Server — .nodes()/.value() na buforze
+// z kilkoma tysiącami zdarzeń potrafi trwać dłużej niż limit zapytania (HYT00).
+// Pobranie target_data jako tekstu jest natychmiastowe, parsowanie robi PHP.
+const Q_ZAP_XE_BUFOR = <<<SQL
 SELECT
-    ISNULL(login, '-')                                       AS [Login],
-    COUNT(*)                                                 AS [Zapytania],
-    CAST(SUM(cpu_us) / 1000.0 AS DECIMAL(18,1))              AS [CPU razem ms],
-    CAST(AVG(cpu_us) / 1000.0 AS DECIMAL(18,1))              AS [CPU srednio ms],
-    CAST(SUM(czas_us) / 1000.0 AS DECIMAL(18,1))             AS [Czas razem ms],
-    CAST(MAX(czas_us) / 1000.0 AS DECIMAL(18,1))             AS [Czas max ms],
-    SUM(odczyty)                                             AS [Odczyty razem]
-FROM Zdarzenia
-GROUP BY login
-ORDER BY SUM(cpu_us) DESC;
+    (SELECT COUNT(*) FROM sys.dm_xe_sessions WHERE name = N'sqlmon_zapytania') AS dziala,
+    DATEDIFF(MINUTE, GETUTCDATE(), GETDATE())                                  AS przesuniecie_min,
+    (SELECT TOP (1) st.target_data
+     FROM sys.dm_xe_sessions AS s
+     JOIN sys.dm_xe_session_targets AS st ON st.event_session_address = s.address
+     WHERE s.name = N'sqlmon_zapytania' AND st.target_name = N'ring_buffer')  AS dane;
 SQL;
+
+/**
+ * Rozbiór bufora ring_buffer sesji sqlmon_zapytania.
+ * Zwraca listę zdarzeń posortowaną od najnowszego.
+ */
+function zdarzeniaXe(string $dane, int $przesuniecieMin): array
+{
+    if ($dane === '') return [];
+    if (!function_exists('simplexml_load_string')) {
+        throw new RuntimeException('Brak rozszerzenia PHP SimpleXML (włącz je w php.ini).');
+    }
+    $xml = simplexml_load_string($dane, 'SimpleXMLElement', LIBXML_COMPACT | LIBXML_PARSEHUGE | LIBXML_NONET);
+    if ($xml === false) {
+        throw new RuntimeException('Nie udało się odczytać XML z bufora sesji Extended Events.');
+    }
+
+    $zdarzenia = [];
+    foreach ($xml->event as $ev) {
+        $akcje = []; $dane_ = [];
+        foreach ($ev->action as $a) { $akcje[(string)$a['name']] = (string)$a->value; }
+        foreach ($ev->data as $d)   { $dane_[(string)$d['name']]  = (string)$d->value; }
+
+        $czasUtc = (string)$ev['timestamp'];
+        try {
+            $czas = (new DateTime($czasUtc))->modify(($przesuniecieMin >= 0 ? '+' : '') . $przesuniecieMin . ' minutes');
+            $czasTxt = $czas->format('Y-m-d H:i:s');
+        } catch (Throwable $e) {
+            $czasTxt = $czasUtc;
+        }
+
+        $tekst = $dane_['statement'] ?? '';
+        if ($tekst === '') $tekst = $dane_['batch_text'] ?? '';
+        $tekst = trim((string)preg_replace('/\s+/u', ' ', $tekst));
+
+        $zdarzenia[] = [
+            'klucz'     => $czasUtc,
+            'login'     => $akcje['server_principal_name'] ?? '',
+            'stacja'    => $akcje['client_hostname'] ?? '',
+            'aplikacja' => $akcje['client_app_name'] ?? '',
+            'baza'      => $akcje['database_name'] ?? '',
+            'czas'      => $czasTxt,
+            'czas_us'   => (int)($dane_['duration'] ?? 0),
+            'cpu_us'    => (int)($dane_['cpu_time'] ?? 0),
+            'odczyty'   => (int)($dane_['logical_reads'] ?? 0),
+            'wiersze'   => (int)($dane_['row_count'] ?? 0),
+            'tekst'     => $tekst,
+        ];
+    }
+    usort($zdarzenia, fn($x, $y) => strcmp($y['klucz'], $x['klucz']));
+    return $zdarzenia;
+}
+
+function historiaXeWiersze(array $zdarzenia, string $login): array
+{
+    $wynik = [];
+    foreach ($zdarzenia as $z) {
+        if ($login !== '' && $z['login'] !== $login) continue;
+        $wynik[] = [
+            'Login'     => $z['login'] !== '' ? $z['login'] : '-',
+            'Stacja'    => $z['stacja'] !== '' ? $z['stacja'] : '-',
+            'Czas'      => $z['czas'],
+            'Baza'      => $z['baza'] !== '' ? $z['baza'] : '-',
+            'Czas ms'   => round($z['czas_us'] / 1000, 1),
+            'CPU ms'    => round($z['cpu_us'] / 1000, 1),
+            'Odczyty'   => $z['odczyty'],
+            'Wiersze'   => $z['wiersze'],
+            'Aplikacja' => mb_substr($z['aplikacja'] !== '' ? $z['aplikacja'] : '-', 0, 40),
+            'Zapytanie' => mb_substr($z['tekst'], 0, 400),
+        ];
+        if (count($wynik) >= 100) break;
+    }
+    return $wynik;
+}
+
+function historiaXeSuma(array $zdarzenia): array
+{
+    $g = [];
+    foreach ($zdarzenia as $z) {
+        $k = $z['login'] !== '' ? $z['login'] : '-';
+        $g[$k] ??= ['n' => 0, 'cpu' => 0, 'czas' => 0, 'max' => 0, 'odczyty' => 0];
+        $g[$k]['n']++;
+        $g[$k]['cpu']     += $z['cpu_us'];
+        $g[$k]['czas']    += $z['czas_us'];
+        $g[$k]['max']      = max($g[$k]['max'], $z['czas_us']);
+        $g[$k]['odczyty'] += $z['odczyty'];
+    }
+    uasort($g, fn($x, $y) => $y['cpu'] <=> $x['cpu']);
+    $wynik = [];
+    foreach ($g as $k => $v) {
+        $wynik[] = [
+            'Login'          => $k,
+            'Zapytania'      => $v['n'],
+            'CPU razem ms'   => round($v['cpu'] / 1000, 1),
+            'CPU srednio ms' => round($v['cpu'] / $v['n'] / 1000, 1),
+            'Czas razem ms'  => round($v['czas'] / 1000, 1),
+            'Czas max ms'    => round($v['max'] / 1000, 1),
+            'Odczyty razem'  => $v['odczyty'],
+        ];
+    }
+    return $wynik;
+}
 
 /*------------------------------------------------------- HISTORIA (kolektor) */
 
@@ -1016,32 +1049,41 @@ if (($_GET['akcja'] ?? '') === 'dane') {
                 'Obejmuje też sesje uśpione. Pokazuje, co użytkownik puścił jako ostatnie, zanim przeszedł w bezczynność.',
                 Q_ZAP_OSTATNIE, [$login, $login]);
 
-            // Historia z Extended Events. Stan sesji sprawdzany osobno, żeby odróżnić
-            // "sesja nie działa" od "sesja działa, ale bufor jest pusty" i od błędu odczytu.
+            // Historia z Extended Events. Jeden odczyt surowego bufora, rozbiór w PHP.
+            // Rozróżniamy: sesja nie działa / działa, ale bufor pusty / błąd odczytu.
             try {
-                $xeSesja = pobierz($pdo, Q_ZAP_XE_STAN);
-                $odp['xe_stan'] = ((int)($xeSesja[0]['dziala'] ?? 0)) > 0 ? 'dziala' : 'brak';
+                $xeOdczyt = pobierz($pdo, Q_ZAP_XE_BUFOR)[0] ?? [];
+                if ((int)($xeOdczyt['dziala'] ?? 0) === 0) {
+                    $odp['xe_stan'] = 'brak';
+                } else {
+                    $zdarzenia = zdarzeniaXe((string)($xeOdczyt['dane'] ?? ''),
+                        (int)($xeOdczyt['przesuniecie_min'] ?? 0));
+                    $historia = historiaXeWiersze($zdarzenia, $login);
+                    if (!$historia) {
+                        $odp['xe_stan'] = 'pusta';
+                    } else {
+                        $odp['xe_stan'] = 'dziala';
+                        $suma = historiaXeSuma($zdarzenia);
+                        $odp['sekcje'][] = [
+                            'tytul'   => 'Podsumowanie historii wg loginu',
+                            'opis'    => 'Agregat z bufora Extended Events — kto sumarycznie zjadł najwięcej CPU.',
+                            'kolumny' => array_keys($suma[0]),
+                            'wiersze' => $suma,
+                            'blad'    => null,
+                        ];
+                        $odp['sekcje'][] = [
+                            'tytul'   => 'Historia zapytań wg użytkownika',
+                            'opis'    => 'Z sesji Extended Events "sqlmon_zapytania". Rejestruje zapytania powyżej progu czasu. '
+                                       . 'W buforze: ' . count($zdarzenia) . ' zdarzeń, pokazane najnowsze 100.',
+                            'kolumny' => array_keys($historia[0]),
+                            'wiersze' => $historia,
+                            'blad'    => null,
+                        ];
+                    }
+                }
             } catch (Throwable $e) {
                 $odp['xe_stan'] = 'blad';
                 $odp['xe_blad'] = $e->getMessage();
-            }
-
-            if ($odp['xe_stan'] === 'dziala') {
-                $xe = sekcja($pdo, 'Historia zapytań wg użytkownika',
-                    'Z sesji Extended Events "sqlmon_zapytania". Rejestruje zapytania powyżej progu czasu.',
-                    Q_ZAP_HISTORIA_XE, [$login, $login]);
-
-                if ($xe['blad'] !== null) {
-                    $odp['xe_stan'] = 'blad';
-                    $odp['xe_blad'] = $xe['blad'];
-                } elseif (!$xe['wiersze']) {
-                    $odp['xe_stan'] = 'pusta';
-                } else {
-                    $odp['sekcje'][] = sekcja($pdo, 'Podsumowanie historii wg loginu',
-                        'Agregat z bufora Extended Events — kto sumarycznie zjadł najwięcej CPU.',
-                        Q_ZAP_HISTORIA_SUMA);
-                    $odp['sekcje'][] = $xe;
-                }
             }
 
             $odp['sekcje'][] = sekcja($pdo, 'Najdroższe zapytania wg CPU (cache planów)',
